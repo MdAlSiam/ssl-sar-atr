@@ -1,2 +1,4 @@
 .ipynb_checkpoints/
-token.txt
+.vscode/
+exp-02/__pycache__
+exp-02/pretext_models
