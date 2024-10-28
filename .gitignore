@@ -2,3 +2,6 @@
 .vscode/
 exp-02/__pycache__
 exp-02/pretext_models
+exp-03/__pycache__
+exp-03/pretext_models
+exp-03/processed_data
