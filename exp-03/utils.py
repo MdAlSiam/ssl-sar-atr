@@ -19,18 +19,6 @@ from data_processor import *
 # Data Augmentation with diverse transformations (Rotation, Brightness, Scaling, Translation, etc.)
 def augment_image(image, rotation_angle):
     """Apply a diverse set of augmentations to the image."""
-    '''
-    image = tf.image.random_flip_left_right(image)  # Flip horizontally
-    image = tf.image.random_brightness(image, max_delta=0.2)  # Brightness adjustment
-    image = tf.image.random_contrast(image, lower=0.8, upper=1.2)  # Contrast adjustment
-    image = tf.image.random_zoom(image, (0.8, 1.2))  # Zooming simulation
-    image = tf.image.random_translation(image, translations=[5, 5])  # Random Translation
-    image = tf.image.random_saturation(image, lower=0.8, upper=1.2)  # Saturation adjustment
-    image = tf.image.random_hue(image, max_delta=0.2)  # Hue adjustment
-    image = tf.image.random_jpeg_quality(image, min_jpeg_quality=50, max_jpeg_quality=100)  # JPEG quality jitter
-    image = tf.image.resize_with_crop_or_pad(image, 70, 70)  # Zooming simulation via resizing
-    image = tf.image.random_crop(image, size=[64, 64, 1])  # Crop back to original size
-    '''
     # Apply rotation (keeping the original logic)
     # rotation_angle = np.random.choice([0, 90, 180, 270])
     if rotation_angle == 90:
