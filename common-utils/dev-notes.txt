@@ -1,0 +1,78 @@
+/* REMOTE ACCESS VIA TUNNEL */
+From Server:
+> Install "Remote Development" extension
+> Press F1 → type "Remote Tunnels: Start"
+> Sign in with GitHub account and Name your machine
+From Client:
+> Install "Remote Development"
+> Press F1 → "Remote Tunnels: Connect"
+> Sign in with same GitHub account and Select your desktop from list
+
+/* KEEP NOTEBOOK RUNNING ON SERVER AND GO OUT CLOSING THE CLIENT */
+From Client:
+> sudo apt-get update
+> sudo apt-get install tmux
+> [from wsl terminal] tmux new -s notebook_session
+> cd your/project/path
+> source venv/bin/activate
+> jupyter nbconvert --to notebook --execute --inplace exp-04/exp_04.01.ipynb
+  jupyter nbconvert --to notebook --execute exp-04/exp_04.01.ipynb --output exp-04/exp_04.01_output.ipynb
+> Detach session: Press Ctrl+B, then D
+> Close VS Code & shutdown local computer - Go out and chill
+
+> Connect to remote desktop via VS Code
+> tmux ls
+> [from wsl terminal] tmux attach -t notebook_session
+> Check your output notebook: exp_04.01_output.ipynb
+> (Kill session when done) tmux kill-session -t notebook_session / exit
+> (Kill all tmux sessions) tmux kill-server
+
+/* CUDA COMPATIBILITY WITH TENSORFLOW */
+> https://www.tensorflow.org/install/source#gpu
+
+/* FRESH VIRUAL ENV : TO BE VERIFIED */
+> python -m venv venv --clear --without-pip # clean virtual environment that doesn't inherit global packages
+in venv:
+> pip uninstall -y -r <(pip freeze)  # Remove all packages
+> pip install <your-required-packages>  # Install only what you need
+
+/* TENSORFLOWxNVIDIARTX INSTALLATION: TO BE VERIFIED  */
+// not sure how it worked out but (from trying backtracking) might be like this
+
+// sudo apt install -y nvidia-cuda-toolkit
+
+# Add the NVIDIA package signing key
+sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/3bf863cc.pub
+
+# Add the CUDA repository
+sudo sh -c 'echo "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/ /" > /etc/apt/sources.list.d/cuda.list'
+
+# Update the package list
+sudo apt update
+
+sudo apt install -y cuda
+
+nvcc --version
+
+echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.bashrc
+source ~/.bashrc
+
+ls /usr/local/cuda/lib64/libcudart.so*
+
+Then (below commands): https://developer.nvidia.com/cudnn-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=20.04&target_type=deb_local
+
+Installation Instructions:
+wget https://developer.download.nvidia.com/compute/cudnn/9.5.1/local_installers/cudnn-local-repo-ubuntu2004-9.5.1_1.0-1_amd64.deb
+sudo dpkg -i cudnn-local-repo-ubuntu2004-9.5.1_1.0-1_amd64.deb
+sudo cp /var/cudnn-local-repo-ubuntu2004-9.5.1/cudnn-*-keyring.gpg /usr/share/keyrings/
+sudo apt-get update
+sudo apt-get -y install cudnn
+To install for CUDA 12, perform the above configuration but install the CUDA 12 specific package:
+sudo apt-get -y install cudnn-cuda-12
+//
+To install for CUDA 11, perform the above configuration but install the CUDA 11 specific package:
+sudo apt-get -y install cudnn-cuda-11
+
+
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+wsl --shutdown
