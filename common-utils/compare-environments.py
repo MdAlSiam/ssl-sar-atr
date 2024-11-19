@@ -3,7 +3,7 @@ import sys
 import os
 from datetime import datetime
 
-REPORT_PATH = 'common-utils/environment_comparison.txt'
+REPORT_PATH = "common-utils/environment_comparison.txt"
 
 def get_venv_info():
     """Get virtual environment name and path"""
@@ -21,6 +21,38 @@ def get_venv_info():
         'active': False
     }
 
+def get_global_python_path():
+    """Get the path of the global Python interpreter"""
+    # Save current PATH
+    original_path = os.environ.get('PATH', '')
+    
+    try:
+        # Temporarily remove virtual environment from PATH
+        if 'VIRTUAL_ENV' in os.environ:
+            venv_path = os.environ['VIRTUAL_ENV']
+            paths = original_path.split(os.pathsep)
+            filtered_paths = [p for p in paths if not p.startswith(venv_path)]
+            os.environ['PATH'] = os.pathsep.join(filtered_paths)
+        
+        # Get global Python path
+        result = subprocess.run(['which', 'python'], 
+                              capture_output=True, 
+                              text=True)
+        global_path = result.stdout.strip()
+        
+        # If not found, try python3
+        if not global_path:
+            result = subprocess.run(['which', 'python3'], 
+                                  capture_output=True, 
+                                  text=True)
+            global_path = result.stdout.strip()
+            
+        return global_path
+    
+    finally:
+        # Restore original PATH
+        os.environ['PATH'] = original_path
+
 def get_python_version(python_path):
     """Get Python version using specified Python executable"""
     try:
@@ -33,6 +65,7 @@ def get_python_version(python_path):
 def get_pip_list(python_path):
     """Get list of installed packages using specified Python executable"""
     try:
+        # Use -m pip to ensure we're using the correct pip for each Python
         result = subprocess.run([python_path, '-m', 'pip', 'list'], 
                               capture_output=True, text=True)
         return result.stdout.strip().split('\n')[2:]  # Skip header rows
@@ -55,13 +88,13 @@ def generate_report():
     # Get virtual environment information
     venv_info = get_venv_info()
     
-    # Get virtual environment Python path
+    # Get Python paths
     venv_python = sys.executable
+    global_python = get_global_python_path()
     
-    # Get global Python path
-    global_python = subprocess.run(['which', 'python3'], 
-                                 capture_output=True, 
-                                 text=True).stdout.strip()
+    # Get versions
+    venv_version = get_python_version(venv_python)
+    global_version = get_python_version(global_python)
     
     # Get package information for both environments
     venv_packages = get_package_dict(get_pip_list(venv_python))
@@ -78,9 +111,13 @@ def generate_report():
     report.append(f"Path: {venv_info['path']}")
     report.append(f"Status: {'Active' if venv_info['active'] else 'Inactive'}")
     
+    report.append("\nPython Paths:")
+    report.append(f"Virtual Environment Python: {venv_python}")
+    report.append(f"Global Python: {global_python}")
+    
     report.append("\n1. Python Versions:")
-    report.append(f"Virtual Environment: {get_python_version(venv_python)}")
-    report.append(f"Global Environment: {get_python_version(global_python)}")
+    report.append(f"Virtual Environment: {venv_version}")
+    report.append(f"Global Environment: {global_version}")
     
     report.append("\n2. Package Version Comparison:")
     report.append(f"{'Package':<30} {'Virtual Env':<15} {'Global':<15} {'Status':<20}")

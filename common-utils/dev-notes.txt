@@ -3,6 +3,8 @@ From Server:
 > Install "Remote Development" extension
 > Press F1 → type "Remote Tunnels: Start"
 > Sign in with GitHub account and Name your machine
+> Run ./startup-wsl.ps1 (user level) and ./wsl-monitor.ps1 (root level, no log in)
+> Set sleep and hibernate to Never | Pause windows updates in emergency situations
 From Client:
 > Install "Remote Development"
 > Press F1 → "Remote Tunnels: Connect"
@@ -14,7 +16,7 @@ From Client:
 > sudo apt-get install tmux
 > [from wsl terminal] tmux new -s notebook_session
 > cd your/project/path
-> source venv/bin/activate
+> (activate virtual environment) source venv/bin/activate
 > jupyter nbconvert --to notebook --execute --inplace exp-04/exp_04.01.ipynb
   jupyter nbconvert --to notebook --execute exp-04/exp_04.01.ipynb --output exp-04/exp_04.01_output.ipynb
 > Detach session: Press Ctrl+B, then D
@@ -29,6 +31,10 @@ From Client:
 
 /* CUDA COMPATIBILITY WITH TENSORFLOW */
 > https://www.tensorflow.org/install/source#gpu
+
+/* GIT LOG IN */
+git config --global user.email "x@y.c"
+git config --global user.name "UserName"
 
 /* FRESH VIRUAL ENV : TO BE VERIFIED */
 > python -m venv venv --clear --without-pip # clean virtual environment that doesn't inherit global packages
