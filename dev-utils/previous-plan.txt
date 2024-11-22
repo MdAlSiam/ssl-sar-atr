@@ -31,11 +31,5 @@ improvement plan after 3-sample-fitting.ipy
 # Downstream
 > * experiment with different layers for feature extraction to identify which provides the most useful representations (facing graph disconnection issue while trying to extraxct features from functional layers in pretrained architectures)
 
-# Results
-
-# Environment
-> ensure reproducibility and making managable with git, requirements.txt and virtual environment
-> run on Laptop+GPU and LabPC+GPU 
-
 See:
 > https://chennuriprateek.github.io/Quanta_Video_Restoration-QUIVER-/ 

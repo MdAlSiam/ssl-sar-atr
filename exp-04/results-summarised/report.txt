@@ -1,11 +1,11 @@
 ===============================================================================
                 QPM MILITARY VEHICLE CLASSIFICATION PROJECT
-                      Complete Analysis and Report
-===============================================================================
+-------------------------------------------------------------------------------
 Project: Quantum Phase Microscopy (QPM) Military Vehicle Classification
 Dataset: Satellite imagery of military vehicles
 Analysis Period: Multiple splits analysis
 ===============================================================================
+
 PROJECT OVERVIEW
 ===============================================================================
 
@@ -344,6 +344,7 @@ Rank  Architecture    Classifier    Avg Acc(%)  StdDev   Peak Acc(%)
 3     InceptionV3     XGBoost       79.2        5.0      88.2
 4     InceptionV3     GradBoost     77.0        7.1      88.6
 5     CNN             GradBoost     75.0        4.0      79.1
+6     ResNet50        XGBoost       69.6        4.3
 * High variance across splits
 
 # Best Recognized Vehicle Classes
@@ -368,11 +369,11 @@ EfficientNetB0 31.3          71.1%     2.27
 ResNet50       44.4          69.6%     1.57
 CNN            7.5           72.1%     9.61
 
-ANALYSIS 001
+###
 
 # Architecture Stability:
 - Most Stable: InceptionV3 (variance typically <7%)
-- Least Stable: VGG16/19 (variance >20%)
+- Least Stable: VGG16/19 (variance >20%) + Does not converge
 - ResNet family shows split-dependent performance (15-17% variance)
 
 # Classifier Patterns:
@@ -390,7 +391,7 @@ ANALYSIS 001
 - Precision typically higher than recall
 - Performance gaps between validation/test suggest overfitting
 
-ANALYSIS 002
+###
 
 For maximum accuracy: InceptionV3 + SVM
 For stability: InceptionV3 + XGBoost
@@ -408,13 +409,14 @@ Between m1, m2, m35, m60 classes
 bmp2 and btr70 are sometimes confused
 t72 is occasionally misclassified as m1 or m2
 
-RECOMMENDATIONS
+RECOMMENDATIONS (SCRATCH)
 
-> Balance class representation in training data
+> Balance class representation in training data / use weighted loss function
 > Analyze feature importance for distinguishing m1, m2, m35, m60
 > Use mixed precision training if supported by hardware | Parallelize data loading and augmentation  
-> Optimize batch size based on GPU memory
+> Optimize batch size based on GPU memory / Dynamic Batch Size
 > Consider model compression techniques like quantization and pruning
+
 > a) Rotation Augmentation:
    - Random rotations (0-360 degrees)
    - Military vehicles can be oriented in any direction
@@ -426,9 +428,12 @@ b) Scale Variations:
 c) Atmospheric Effects:
    - Add gaussian noise
    - Blur variations
+      > Median Blur: Effective for reducing salt-and-pepper noise 
+      (a type of image noise that appears as white and black pixels randomly scattered throughout an image)
    - Contrast/brightness adjustments
    - Simulates different atmospheric conditions
 d) Shadow Augmentation:
+   > shadow augmentation paper: https://www.asprs.org/wp-content/uploads/pers/2005journal/feb/2005_feb_169-177.pdf
    - Add synthetic shadows
    - Vary shadow directions
    - Important for satellite imagery interpretation
@@ -436,6 +441,13 @@ d) Shadow Augmentation:
 a) Multi-Scale Processing:
    - Add parallel paths processing different scales
    - Combine InceptionV3 with spatial pyramid pooling
+      > Spatial Pyramid Pooling (SPP) is a pooling layer that removes the fixed-size constraint of the network, 
+      i.e. a CNN does not require a fixed-size input image. 
+      Specifically, we add an SPP layer on top of the last convolutional layer. 
+      The SPP layer pools the features and generates fixed-length outputs, 
+      which are then fed into the fully-connected layers (or other classifiers). 
+      In other words, we perform some information aggregation at a deeper stage of the network hierarchy 
+      (between convolutional layers and fully-connected layers) to avoid the need for cropping or warping at the beginning.
    - Help capture both fine details and overall vehicle shape
 b) Attention Mechanisms:
    - Add spatial attention to focus on vehicle features
@@ -445,7 +457,8 @@ c) Custom Architecture:
    - Combine best elements of InceptionV3 and EfficientNetB0
    - Add skip connections for better feature preservation
    - Optimize for satellite imagery specifically
-> raining Strategy Improvements:
+
+> Training Strategy Improvements:
 a) Two-Stage Training:
    Stage 1: Coarse classification
    - Vehicle type (tank, truck, artillery)
@@ -453,98 +466,58 @@ a) Two-Stage Training:
    - Specific vehicle model
 
 b) Curriculum Learning:
-   1. Start with easily distinguishable classes
+   1. Start with easily distinguishable classes (significantly different from one another)
    2. Gradually introduce similar vehicles
    3. Finally train on full dataset
 
 c) Loss Function Modifications:
-   - Use focal loss to handle class imbalance
+   - Use focal loss to handle class imbalance > addresses class imbalance by focusing more on hard-to-classify examples and less on easy ones
    - Add triplet loss for similar vehicle discrimination
+      - The distance between an anchor and a positive (same class) is minimized.
+      - The distance between an anchor and a negative (different class) is maximized.
    - Implement angular margin loss for better separation
+      - enforces better separation between classes by adding a margin to the angle between feature vectors and class prototypes
+   - combining loss functions
 
 # Feature Engineering:
-a) Military Vehicle Specific Features:
    - Edge detection for vehicle silhouettes
-   - Shadow direction and length
-   - Size and aspect ratio measurements
-   - Texture patterns specific to vehicle types
-
-b) Contextual Features:
-   - Surrounding terrain information
-   - Shadow patterns
-   - Local contrast patterns
-   - Multi-resolution analysis
+   - Multi-resolution analysis 
+      - Early layers capture low-level features (e.g., edges, textures), Deeper layers capture high-level, abstract features (e.g., overall object structure)
+         Ways to incorporate:
+         - Multi-scale pooling: Use different pooling sizes to aggregate information at various scales.
+         - Dilated convolutions: Capture larger receptive fields without losing resolution.
+         - Feature pyramids: Combine features from different layers.
 
 # Ensemble Strategies:
 a) Model Ensemble:
-   - InceptionV3 with SVM
-   - EfficientNetB0 with XGBoost
-   - CNN with Gradient Boosting
    - Weighted voting based on model confidence
 
 b) Feature Ensemble:
-   - Combine deep features from different architectures
-   - Add engineered features
-   - Use stacked generalization
+   - Combine deep(er) features from different architectures
+   - Use stacked generalization (stacking prediction/features from different models and feeding them to a new meta-model)
 
 # Domain-Specific Preprocessing:
 a) Image Enhancement:
-   - Adaptive histogram equalization
-   - Denoising specific to satellite imagery
+   - Adaptive histogram equalization 
+      - enhance the contrast of an image ->  works locally by dividing the image into smaller regions (or tiles) and equalizing the histogram of each region independently
    - Edge enhancement
-   - Shadow removal/enhancement
-
-b) Segmentation Pipeline:
-   1. Vehicle detection/localization
-   2. Background removal
-   3. Classification on isolated vehicles
-
-# Data Collection Improvements:
-b) Synthetic Data Generation:
-   - Use 3D models of military vehicles
-   - Render with satellite image characteristics
-   - Generate hard negative examples
+   - Shadow removal
+   - Background removal
+   - Classification on isolated vehicles
 
 # Model Interpretability and Refinement:
 a) Analysis Tools:
    - Grad-CAM visualization
+      - Grad-CAM (Gradient-weighted Class Activation Mapping) is a visualization technique used to highlight the regions of an image that are most relevant for a model's decision. 
+      - It generates heatmaps by computing the gradients of the target class score concerning the feature maps of a convolutional layer.
    - Feature importance analysis
-   - Error analysis by vehicle type
-   - Confusion matrix analysis
 
-b) Iterative Improvement:
-   1. Identify common misclassifications
-   2. Add targeted augmentations
-   3. Adjust architecture for problem areas
-   4. Retrain and validate
-
-Implementation Optimizations:
-
-Copya) Training Process:
-   - Use mixed precision training
-   - Implement gradient accumulation
-   - Optimize batch size
-   - Use learning rate scheduling
-
-b) Cross-Validation:
-   - Stratified k-fold for better evaluation
-   - Ensure balanced class distribution
-   - Monitor for overfitting
-
-Military Vehicle Specific Considerations:
-
-Copya) Class Weighting:
-   - Based on military importance
-   - Strategic value of correct identification
-   - Cost of misclassification
-
-b) Confidence Thresholding:
+# Confidence Thresholding:
    - High confidence for critical classifications
    - Allow "unknown" classification
    - Multiple class possibilities with probabilities
 
 Purpose: Understand what features/patterns each architecture learns and which are most crucial for classification.
-
 Methods to Analyze:
 a) Visualization Techniques:
    - Grad-CAM (Gradient-weighted Class Activation Mapping)
@@ -569,98 +542,16 @@ c) Saliency Maps:
    - Compare across different successful/failed cases
    - Identify common patterns in correct classifications
 
-A) Systematic Analysis of Misclassifications:
+Hyperparameter Tuning:
+# Tune learning rates, tree depths, and regularization parameters for better generalization.
+# Perform hyperparameter tuning for XGBoost and GradBoost on InceptionV3 and ResNet50 to further optimize results.
 
-1. Type 1: Similar Vehicle Confusion
-   Example:
-   - M1 tank classified as M2 tank
-   Root Causes:
-   - Similar size/shape
-   - Similar features
-   - Similar shadow patterns
-   Solution Approaches:
-   - Add more discriminative features
-   - Increase training samples of these classes
-   - Add specific augmentations
-
-2. Type 2: Lighting/Shadow Effects
-   Example:
-   - Same vehicle misclassified under different lighting
-   Root Causes:
-   - Shadow orientation changes
-   - Contrast variations
-   - Time of day differences
-   Solution Approaches:
-   - Shadow augmentation
-   - Lighting normalization
-   - Time-of-day invariant features
-
-3. Type 3: Resolution-Based Failures
-   Example:
-   - Small vehicles misclassified more often
-   Root Causes:
-   - Insufficient pixels for detail
-   - Feature loss in small objects
-   Solution Approaches:
-   - Super-resolution techniques
-   - Scale-specific training
-   - Multi-scale feature extraction
-
-B) Statistical Analysis of Failures:
-
-1. Condition-Based Analysis:
-   Track failure rates based on:
-   - Time of day
-   - Weather conditions
-   - Terrain type
-   - Vehicle orientation
-   - Image resolution
-
-2. Pattern Recognition in Failures:
-   Look for common factors:
-   - Do failures occur more in certain conditions?
-   - Are certain vehicle pairs commonly confused?
-   - Is there a relationship with image quality?
-
-C) Creating Failure Matrices:
-
-Example Matrix:
-
-// Some codes at https://claude.ai/chat/a4b8f80a-569a-41a2-a613-0bce07559517
-
-1. Top Performing Architectures
-InceptionV3 and ResNet50 consistently outperform others, especially with GradBoost and XGBoost classifiers:
-
-InceptionV3 + XGBoost: Accuracy of 78.8 ± 5.2% with F1-score of 76.9 ± 6.1%.
-InceptionV3 + GradBoost: Accuracy of 78.5 ± 6.2%, slightly behind XGBoost.
-ResNet50 + XGBoost: Accuracy of 69.6 ± 4.3%.
-ResNet152 shows promising results but has higher variability across splits, particularly for Random Forest and GradBoost, suggesting sensitivity to data distribution.
-
-2. Best Classifiers
-XGBoost and GradBoost generally yield higher accuracy and F1-scores compared to RandomForest and SVM across most architectures.
-
-XGBoost consistently achieves better results for InceptionV3 and ResNet architectures.
-GradBoost performs competitively but lags slightly behind XGBoost in certain cases.
-SVM performs poorly for most architectures, with significant variability and lower scores. It's not well-suited for this task, possibly due to the nature of the feature space.
-
-3. Variability Across Splits
-The standard deviation for accuracy and F1-scores is higher for certain architecture-classifier combinations, particularly:
-EfficientNetB0 + SVM: High variability (Accuracy: 61.4 ± 24.0%).
-ResNet152 + Random Forest: Significant drop in one split, reducing overall consistency (Accuracy: 65.9 ± 15.8%).
-This variability suggests potential overfitting or sensitivity to certain splits.
-4. Trends Across Architectures
-Shallow Architectures (CNN): Lower overall performance, with XGBoost achieving the best results among classifiers.
-Deeper Architectures (ResNet, InceptionV3): Higher scores overall, indicating better feature extraction capabilities.
-
-4. Hyperparameter Tuning
-Perform hyperparameter tuning for XGBoost and GradBoost on InceptionV3 and ResNet50 to further optimize results.
-Tune learning rates, tree depths, and regularization parameters for better generalization.
-5. Explore Semi-Supervised Learning
+>>> Explore Semi-Supervised Learning
 Incorporate semi-supervised learning (SSL) techniques for improving performance, especially for architectures with higher variability.
 Techniques like pseudo-labeling or self-training could enhance performance on low-performing splits.
-6. Visual Analysis
-Generate confusion matrices and ROC curves for the best-performing combinations to evaluate detailed class-wise performance.
-7. Consider Ensemble Learning
-Combine predictions from the top-performing classifiers (e.g., GradBoost and XGBoost) for a more robust solution.
-8. Explore Transfer Learning
-Fine-tune InceptionV3 and ResNet models with pre-trained weights on the specific dataset to leverage domain knowledge.
+
+# ROC curves
+
+# Combine predictions from the top-performing classifiers
+
+// Some codes at https://claude.ai/chat/a4b8f80a-569a-41a2-a613-0bce07559517, https://chatgpt.com/c/673e582f-689c-8013-8399-7d80c1dad692 
