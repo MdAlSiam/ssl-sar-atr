@@ -335,39 +335,40 @@ XGBoost      Accuracy    38.4%    33.5%    28.5%    33.5%    28.5%    32.5±4.2%
              Recall      36.1%    34.5%    26.9%    34.5%    26.9%    31.8±4.4%
              F1-Score    34.7%    33.2%    27.7%    33.2%    27.7%    31.3±3.3%
 
-# Top Performing Combinations:
-------------------------------
-Rank  Architecture    Classifier    Avg Acc(%)  StdDev   Peak Acc(%)
-----  -------------   -----------   ----------  -------  -----------
-1     InceptionV3     SVM           81.1        1.5      82.5
-2     EfficientNetB0  SVM           93.2*       27.2     93.2
-3     InceptionV3     XGBoost       79.2        5.0      88.2
-4     InceptionV3     GradBoost     77.0        7.1      88.6
-5     CNN             GradBoost     75.0        4.0      79.1
-6     ResNet50        XGBoost       69.6        4.3
-* High variance across splits
+### Top Performing Combinations:
 
-# Best Recognized Vehicle Classes
-----------------------------------------------------
-Architecture    Class     Accuracy    Consistency
-InceptionV3     M1        89.2%      ±4.2%
-InceptionV3     T72       87.8%      ±3.8%
-EfficientNetB0  ZSU23     86.4%      ±4.5%
++-----+----------------+-------------+-------------+--------+-------------+
+| Rank| Architecture   | Classifier  | Avg Acc (%) | StdDev | Peak Acc (%)|
++-----+----------------+-------------+-------------+--------+-------------+
+|   1 | InceptionV3    | SVM         | 80.2        | 8.1    | 89.0        |
+|   2 | InceptionV3    | XGBoost     | 78.8        | 5.2    | 88.2        |
+|   3 | InceptionV3    | GradBoost   | 78.5        | 6.2    | 88.6        |
+|   4 | CNN            | GradBoost   | 69.9        | 5.6    | 74.5        |
+|   5 | ResNet50       | XGBoost     | 69.6        | 4.3    | 77.2        |
+|   6 | EfficientNetB0 | SVM         | 61.4        | 24.0   | 93.2        |
++-----+----------------+-------------+-------------+--------+-------------+
 
-# Most Challenging Classes
------------------------------------------------------
-Architecture    Class     Accuracy    Consistency
-All             BTR70     71.2%      ±8.9%
-All             BMP2      73.5%      ±7.6%
-All             2S1       75.8%      ±6.8%
+                           # Best Recognized Vehicle Classes
+                           ----------------------------------------------------
+                           Architecture    Class     Accuracy    Consistency
+                           InceptionV3     M1        89.2%      ±4.2%
+                           InceptionV3     T72       87.8%      ±3.8%
+                           EfficientNetB0  ZSU23     86.4%      ±4.5%
 
-# Training Time vs Accuracy Trade-off
------------------------------------------------------
-Architecture    Train Time(s)  Accuracy  Efficiency Ratio
-InceptionV3    47.8          78.8%     1.65
-EfficientNetB0 31.3          71.1%     2.27
-ResNet50       44.4          69.6%     1.57
-CNN            7.5           72.1%     9.61
+                           # Most Challenging Classes
+UNVERIFIED                 -----------------------------------------------------
+                           Architecture    Class     Accuracy    Consistency
+                           All             BTR70     71.2%      ±8.9%
+                           All             BMP2      73.5%      ±7.6%
+                           All             2S1       75.8%      ±6.8%
+
+                           # Training Time vs Accuracy Trade-off
+                           -----------------------------------------------------
+                           Architecture    Train Time(s)  Accuracy  Efficiency Ratio
+                           InceptionV3    47.8          78.8%     1.65
+                           EfficientNetB0 31.3          71.1%     2.27
+                           ResNet50       44.4          69.6%     1.57
+                           CNN            7.5           72.1%     9.61
 
 ###
 
@@ -511,6 +512,7 @@ a) Analysis Tools:
       - Grad-CAM (Gradient-weighted Class Activation Mapping) is a visualization technique used to highlight the regions of an image that are most relevant for a model's decision. 
       - It generates heatmaps by computing the gradients of the target class score concerning the feature maps of a convolutional layer.
    - Feature importance analysis
+   - use techniques like t-SNE or PCA to visualize the extracted features and understand their separability
 
 # Confidence Thresholding:
    - High confidence for critical classifications
@@ -554,4 +556,48 @@ Techniques like pseudo-labeling or self-training could enhance performance on lo
 
 # Combine predictions from the top-performing classifiers
 
+# BM3D
+
+# using contrastive learning methods like SimCLR or BYOL for feature extraction (have shown great results in self-supervised learning)
+   - Contrastive learning methods like SimCLR and BYOL have gained prominence for learning high-quality, 
+   generalizable feature representations without requiring labeled data.
+    These methods leverage self-supervised learning to train models to extract meaningful features 
+    that can later be used for downstream tasks like classification, segmentation, or retrieval.
+   - SimCLR learns feature representations by maximizing agreement between different augmented views of the same image and contrasting them with views of other images. 
+   It employs a contrastive loss function, such as the Normalized Temperature-Scaled Cross-Entropy Loss (NT-Xent) 
+
+# Vision Transformer Architectures  
+
 // Some codes at https://claude.ai/chat/a4b8f80a-569a-41a2-a613-0bce07559517, https://chatgpt.com/c/673e582f-689c-8013-8399-7d80c1dad692 
+
+/ SORTED OUT RECOMMENDATIONS */
+   Dataloading:
+      1. To handle class imbalance, data will be truncated to the number of samples of the smallest class
+      2. If there are more data in a larger class, data will be chosen randomly
+      or, the data will be chosen from the first part (options will be available to configure pipeline)
+   Data Augmentation:
+      1. Rotation: (0, 90, 180, 270) // 0 is the original image
+      2. Very Little Guassian Blur
+      3. Shadow Augmentation
+      4. BM3D Denoising
+      or, 
+      BM3D Denoising for all the images then apply (1), (2), (3)
+      (options will be available to configure pipeline)
+      ---
+   Pretext Task:
+      1. CNN [Changes: Relu->Leaky Relu | Avg Pooling -> Max Pooling | squeeze and excitation]
+      2. Add Vision Transformer Based Architectures: https://www.youtube.com/watch?v=nTlLAS7N7qE&list=PLv8Cp2NvcY8DLQc0vBk7JS3FpX6dgNKWI&index=1
+      3. Loss Function Modifications:
+         - Add triplet loss for similar vehicle discrimination
+            - The distance between an anchor and a positive (same class) is minimized.
+            - The distance between an anchor and a negative (different class) is maximized.
+         - Implement angular margin loss for better separation
+            - enforces better separation between classes by adding a margin to the angle between feature vectors and class prototypes
+         - combining loss functions
+   Downstream Task:
+      1. Should be able to use features from any layer of the Pretext architecture
+   Results:
+      1. The result log should be more concise without losing any data it is currently printing.
+      2. Should add the ROC curves and training curves. (Since we are now using text file to keep the outputs, what should be the best way to prepare the results then? We cannot use jupyter notebook outputs since the notebook outputs under the cell are not being saved correctly, as we will run the code in a remote command line server)
+
+   Apply this recommendations to the current code pipeline. Keep the code self explanatory with appropriate and adequete comments.

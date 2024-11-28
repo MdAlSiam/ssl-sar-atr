@@ -29,6 +29,9 @@ From Client:
 > (Kill session when done) tmux kill-session -t notebook_session / exit
 > (Kill all tmux sessions) tmux kill-server
 
+/* .ipynb to .py */
+jupyter nbconvert --to script exp-04/exp_04.01.ipynb
+
 /* CUDA COMPATIBILITY WITH TENSORFLOW */
 > https://www.tensorflow.org/install/source#gpu
 

@@ -14,3 +14,9 @@ exp-04/__pycache__
 exp-04/pretext_models
 exp-04/processed_data
 exp-04/results
+exp-06/__pycache__
+exp-06/pretext_models
+exp-06/processed_data
+exp-06/results
+exp-06/model_summaries
+augmentation-check/
