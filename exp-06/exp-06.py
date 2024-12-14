@@ -76,7 +76,7 @@ classifier_list = [
 
 experiment_parameters = {
     'mode': 'all',  # choices: 'process', 'pretext', 'downstream', 'all'
-    'split_index': 4,
+    'split_index': 0,
     'architecture': 'cnn',  # options: specific architecture like 'cnn' or 'all'
     'classifier': 'all',  # choices: 'random_forest', 'svm', 'gradient_boosting', 'xgboost'
     'data_dir': '/mnt/d/SAMPLE_dataset_public/png_images/qpm/real' # Currently working only with the qpm/real folder
@@ -385,15 +385,18 @@ class ResultsTracker:
             'Dataset': f"{data_dir.split('/')[-2]}_{data_dir.split('/')[-1]}_test_split_ind_{hyperparameters['test_split_index']}",
             'Architecture': architecture,
             'Classifier': classifier,
-            'CV_Accuracy': f"{np.mean(cv_metrics['accuracies'])*100:.1f}±{np.std(cv_metrics['accuracies'])*100:.1f}",
-            'CV_Precision': f"{np.mean(cv_metrics['precisions'])*100:.1f}±{np.std(cv_metrics['precisions'])*100:.1f}",
-            'CV_Recall': f"{np.mean(cv_metrics['recalls'])*100:.1f}±{np.std(cv_metrics['recalls'])*100:.1f}",
-            'CV_F1': f"{np.mean(cv_metrics['f1_scores'])*100:.1f}±{np.std(cv_metrics['f1_scores'])*100:.1f}",
-            'Test_Accuracy': f"{test_metrics['accuracy']*100:.1f}",
-            'Test_Precision': f"{test_metrics['precision']*100:.1f}",
-            'Test_Recall': f"{test_metrics['recall']*100:.1f}",
-            'Test_F1': f"{test_metrics['f1']*100:.1f}",
-            'Test_Confusion_Matrix': f"{test_metrics['confusion_matrix']}"
+            'CV_Accuracy': f"{np.mean(cv_metrics['accuracies'])*100:.2f}±{np.std(cv_metrics['accuracies'])*100:.2f}",
+            'CV_Precision': f"{np.mean(cv_metrics['precisions'])*100:.2f}±{np.std(cv_metrics['precisions'])*100:.2f}",
+            'CV_Recall': f"{np.mean(cv_metrics['recalls'])*100:.2f}±{np.std(cv_metrics['recalls'])*100:.2f}",
+            'CV_F1': f"{np.mean(cv_metrics['f1_scores'])*100:.2f}±{np.std(cv_metrics['f1_scores'])*100:.2f}",
+            'Test_Accuracy': f"{test_metrics['accuracy']*100:.2f}",
+            'Test_Precision': f"{test_metrics['precision']*100:.2f}",
+            'Test_Recall': f"{test_metrics['recall']*100:.2f}",
+            'Test_F1': f"{test_metrics['f1']*100:.2f}",
+            'Test_Confusion_Matrix': f"{test_metrics['confusion_matrix']}",
+            'TPR': f"{test_metrics['tpr']}",
+            'FPR': f"{test_metrics['fpr']}",
+            'ROC_AUC': f"{test_metrics['roc_auc']}"
         }
         self.results.append(result)
 
@@ -412,6 +415,8 @@ class ResultsTracker:
             display_cols = [
                 'Classifier',
                 'Test_Accuracy', 'Test_Precision', 'Test_Recall', 'Test_F1',
+                # 'TPR', 'FPR',
+                'ROC_AUC',
                 'CV_Accuracy', 'CV_Precision', 'CV_Recall', 'CV_F1'
             ]
 
@@ -1185,7 +1190,7 @@ def evaluate_downstream_task(clf, X_test, y_test, pretext_classifier, save_dir=F
         roc_auc = auc(fpr, tpr)
         
         plt.plot(fpr, tpr, color='darkorange', lw=2, 
-                label=f'ROC curve (AUC = {roc_auc:.2f})')
+                label=f'ROC curve (AUC = {roc_auc:.4f})')
         
         metrics.update({
             'roc_auc': roc_auc,
@@ -1199,15 +1204,21 @@ def evaluate_downstream_task(clf, X_test, y_test, pretext_classifier, save_dir=F
         else:
             # For decision_function with multiclass, we need to handle OvR and OvO cases
             decision_values = clf.decision_function(X_test)
-            if decision_values.ndim == 1:
-                # OvR case - reshape to match predict_proba format
+            # if decision_values.ndim == 1:
+            #     # OvR case - reshape to match predict_proba format
+            #     y_scores = np.column_stack([1 - decision_values, decision_values])
+            # else:
+            #     # OvO case - convert to OvR probabilities
+            #     y_scores = np.zeros((len(y_test), n_classes))
+            #     for i in range(n_classes):
+            #         y_scores[:, i] = (decision_values[:, i] > 0).mean(axis=1)
+            if decision_values.ndim > 1:  # OvO case
+                # Normalize decision values for approximate class probabilities
+                y_scores = np.exp(decision_values) / np.sum(np.exp(decision_values), axis=1, keepdims=True)
+            else:  # OvR case
+                # Map decision values to probabilities
                 y_scores = np.column_stack([1 - decision_values, decision_values])
-            else:
-                # OvO case - convert to OvR probabilities
-                y_scores = np.zeros((len(y_test), n_classes))
-                for i in range(n_classes):
-                    y_scores[:, i] = (decision_values[:, i] > 0).mean(axis=1)
-                
+
         # Compute ROC curve and ROC area for each class
         fpr = dict()
         tpr = dict()
@@ -1223,7 +1234,7 @@ def evaluate_downstream_task(clf, X_test, y_test, pretext_classifier, save_dir=F
                 fpr[i], 
                 tpr[i], 
                 lw=2, 
-                label=f'ROC curve class {i} (AUC = {roc_auc[i]:.2f})'
+                label=f'ROCC Class {i} (AUC = {roc_auc[i]:.4f})'
             )
         
         # Compute micro-average ROC curve and ROC area
@@ -1236,16 +1247,16 @@ def evaluate_downstream_task(clf, X_test, y_test, pretext_classifier, save_dir=F
         plt.plot(
             fpr["micro"], 
             tpr["micro"],
-            label=f'micro-average ROC curve (AUC = {roc_auc["micro"]:.2f})',
+            label=f'micro-average ROC curve (AUC = {roc_auc["micro"]:.4f})',
             color='deeppink', 
             linestyle=':', 
             linewidth=4
         )
         
         metrics.update({
-            'roc_auc': roc_auc,
-            'fpr': fpr,
-            'tpr': tpr
+            'roc_auc': roc_auc["micro"],
+            'fpr': fpr["micro"],
+            'tpr': tpr["micro"]
         })
     
     # Complete the ROC plot
@@ -1514,4 +1525,4 @@ if __name__ == "__main__":
         if isinstance(sys.stdout, MultiWriter):
             sys.stdout.log.close()
         sys.stdout = sys.__stdout__
-        print("=== PROCESS FINISHED ===")
+        print(f"=== PROCESS FINISHED: {EXP_ID} ===")
