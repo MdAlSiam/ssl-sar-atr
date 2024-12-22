@@ -4,6 +4,8 @@ venv/
 wslvenv/
 wsl-p39-venv/
 wsl-p3_10-global-gcc9_5_1-bazel5_3_0-cuDNN8_6_CUDA11_8/
+torchenv/
+pytorch/
 common-utils/token.txt
 exp-02/__pycache__
 exp-02/pretext_models
@@ -21,3 +23,9 @@ exp-06/results
 exp-06/figures
 exp-06/model_summaries
 augmentation-check/
+exp-07/__pycache__
+exp-07/pretext_models
+exp-07/processed_data
+exp-07/results
+exp-07/figures
+exp-07/model_summaries

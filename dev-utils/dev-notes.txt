@@ -95,6 +95,7 @@
                         > Check your output notebook: exp_04.01_output.ipynb
                         > (Kill session when done) tmux kill-session -t notebook_session / exit
                         > (Kill all tmux sessions) tmux kill-server
+
 >> RANDOM COMMANDS:
                       > .ipynb to .py
                         jupyter nbconvert --to script exp-04/exp_04.01.ipynb
@@ -106,7 +107,36 @@
                       > CUDA COMPATIBILITY WITH TENSORFLOW
                         https://www.tensorflow.org/install/source#gpu
 
-/* [DOES NOT WORK] AUTOMATIC START OF VS CODE AT POWER UP */
+>> PYTORCH IN A FRESH VIRUTUAL ENVIRONMENT:
+                      [WINDOWS: CURRENTLY NOT WORKING AS VERSIONS ARE NOT COMPATIBLE]
+                      > python -m venv torchenv --clear --without-pip
+                      > source torchenv/bin/activate
+                      > pip uninstall -y -r <(pip freeze)
+                      > curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+                      > python get-pip.py
+                      > rm get-pip.py
+                      > pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu120
+                      > pip install --no-cache-dir numpy pandas matplotlib opencv-python scikit-learn xgboost scikit-image tabulate tqdm bm3d
+                      > which python
+                      > pip list
+                      [LINUX]
+                      > sudo apt update
+                      > sudo apt install python3-venv
+                      > cd pytorch_project
+                      > python3 -m venv pytorch_env
+                      > source pytorch_env/bin/activate
+                      > pip install --upgrade pip
+                      > pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+                      > which python
+                      python
+                          import torch
+                          print(f"PyTorch version: {torch.__version__}")
+                          print(f"CUDA available: {torch.cuda.is_available()}")
+                          print(f"CUDA device count: {torch.cuda.device_count()}")
+                          if torch.cuda.is_available():
+                              print(f"CUDA device name: {torch.cuda.get_device_name(0)}")
+
+/* [DOES NOT WORK?] AUTOMATIC START OF VS CODE AT POWER UP */
 > sudo nano /etc/systemd/system/vscode-server.service
 >   [Unit]
     Description=VS Code Server Auto Starter at Power Up
@@ -128,17 +158,6 @@
     > sudo systemctl start vscode-server.service
     > sudo systemctl restart vscode-server.service
 
-/*  */
-> 
-
-/* GIT LOG IN */
-
-
-/* FRESH VIRUAL ENV : TO BE VERIFIED */
-> python -m venv venv --clear --without-pip # clean virtual environment that doesn't inherit global packages
-in venv:
-> pip uninstall -y -r <(pip freeze)  # Remove all packages
-> pip install <your-required-packages>  # Install only what you need
 
 /* TENSORFLOWxNVIDIARTX INSTALLATION: TO BE VERIFIED  */
 // not sure how it worked out but (from trying backtracking) might be like this
