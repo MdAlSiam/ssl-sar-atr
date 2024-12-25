@@ -29,3 +29,5 @@ exp-07/processed_data
 exp-07/results
 exp-07/figures
 exp-07/model_summaries
+exp-07/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]/
+exp-07/temp.py

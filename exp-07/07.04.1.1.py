@@ -1,3 +1,5 @@
+# No validation set, only train and test
+
 import os
 from pathlib import Path
 import re
@@ -8,10 +10,10 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+from torch.cuda.amp import autocast, GradScaler
 from typing import Dict, List, Tuple
 import pandas as pd
 from collections import Counter, defaultdict
-from tabulate import tabulate
 import matplotlib.pyplot as plt
 import copy
 import torch.nn.functional as F
@@ -20,28 +22,195 @@ from enum import Enum
 from scipy.ndimage import gaussian_filter
 import random
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score, 
+    confusion_matrix, roc_curve, auc
+)
 from sklearn.svm import SVC
 import xgboost as xgb
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, label_binarize
 import bm3d
 import sys
 from datetime import datetime
-import numpy as np
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.svm import SVC
-import xgboost as xgb
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
-import os
+import seaborn as sns
+import json
+from tqdm import tqdm
+import traceback
+import torch.multiprocessing as mp
 
+# Global configurations
 RANDOM_SEED = 42
-EXPERIMENT_BASE_DIR = 'exp-07'
 EXP_ID = datetime.now().strftime('%Y%m%d-%H%M%S')
-MODEL_DIR = os.path.join(EXPERIMENT_BASE_DIR, "pretext_models")
-DATA_DIR = os.path.join(EXPERIMENT_BASE_DIR, "processed_data")
+EXPERIMENT_BASE_DIR = os.path.join('exp-07', f'{EXP_ID}')
 RESULTS_DIR = os.path.join(EXPERIMENT_BASE_DIR, "results")
 FIGURES_DIR = os.path.join(EXPERIMENT_BASE_DIR, "figures")
+
+# Set random seeds for reproducibility
+random.seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
+torch.manual_seed(RANDOM_SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(RANDOM_SEED)
+
+# Hyperparameters
+hyperparameters = {
+    'rf_n_estimators': 100,
+    'svm_kernel': 'linear',
+    'gb_n_estimators': 100,
+    'xgb_n_estimators': 100,
+    'random_seed': RANDOM_SEED,
+    'batch_size': 128, # 16 INPAPER
+    'num_epochs': 60,
+    'learning_rate': 0.001
+}
+
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, np.float32):
+            return float(obj)
+        return json.JSONEncoder.default(self, obj)
+
+class PreextTask(Enum):
+    ORIGINAL = 0
+    ROTATE_90 = 1
+    ROTATE_180 = 2
+    ROTATE_270 = 3
+    BLUR = 4
+    FLIP_HORIZONTAL = 5
+    FLIP_VERTICAL = 6
+    DENOISE = 7
+    ZOOM_IN = 8
+
+def augment_single_image(image, pretext_task):
+    """
+    GPU-optimized image augmentation function
+    """
+    # Convert input to tensor and move to GPU
+    if torch.is_tensor(image):
+        aug_image = image.to('cuda')
+    else:
+        aug_image = torch.from_numpy(image).to('cuda')
+    
+    # Create a copy on GPU
+    aug_image = aug_image.clone()
+    
+    # Store original shape
+    original_shape = aug_image.shape
+    
+    # Remove channel dimension if present
+    if len(aug_image.shape) == 3:
+        aug_image = aug_image.squeeze()
+    
+    if pretext_task == PreextTask.ORIGINAL:
+        pass
+        
+    elif pretext_task == PreextTask.ROTATE_90:
+        aug_image = torch.rot90(aug_image, k=1, dims=(-2, -1))
+        
+    elif pretext_task == PreextTask.ROTATE_180:
+        aug_image = torch.rot90(aug_image, k=2, dims=(-2, -1))
+        
+    elif pretext_task == PreextTask.ROTATE_270:
+        aug_image = torch.rot90(aug_image, k=3, dims=(-2, -1))
+        
+    elif pretext_task == PreextTask.BLUR:
+        # Create Gaussian kernel on GPU
+        kernel_size = 5
+        sigma = torch.tensor(random.uniform(0.5, 1.0)).to('cuda')
+        channels = 1
+        
+        # Create meshgrid
+        x = torch.linspace(-2, 2, kernel_size).to('cuda')
+        y = torch.linspace(-2, 2, kernel_size).to('cuda')
+        y_grid, x_grid = torch.meshgrid(y, x)
+        
+        # Create Gaussian kernel
+        kernel = torch.exp(-(x_grid.pow(2) + y_grid.pow(2)) / (2 * sigma * sigma))
+        kernel = kernel / kernel.sum()
+        
+        # Reshape kernel for convolution
+        kernel = kernel.view(1, 1, kernel_size, kernel_size)
+        
+        # Add batch and channel dimensions to image
+        aug_image = aug_image.unsqueeze(0).unsqueeze(0)
+        
+        # Apply convolution
+        aug_image = F.conv2d(aug_image, kernel, padding=kernel_size//2)
+        aug_image = aug_image.squeeze()
+        
+    elif pretext_task == PreextTask.FLIP_HORIZONTAL:
+        aug_image = torch.flip(aug_image, dims=[-1])
+        
+    elif pretext_task == PreextTask.FLIP_VERTICAL:
+        aug_image = torch.flip(aug_image, dims=[-2])
+        
+    elif pretext_task == PreextTask.DENOISE:
+        # For denoising, we'll use a simple Gaussian blur as BM3D is not GPU-compatible
+        kernel_size = 3
+        sigma = torch.tensor(0.5).to('cuda')
+        
+        x = torch.linspace(-1, 1, kernel_size).to('cuda')
+        y = torch.linspace(-1, 1, kernel_size).to('cuda')
+        y_grid, x_grid = torch.meshgrid(y, x)
+        
+        kernel = torch.exp(-(x_grid.pow(2) + y_grid.pow(2)) / (2 * sigma * sigma))
+        kernel = kernel / kernel.sum()
+        kernel = kernel.view(1, 1, kernel_size, kernel_size)
+        
+        aug_image = aug_image.unsqueeze(0).unsqueeze(0)
+        aug_image = F.conv2d(aug_image, kernel, padding=kernel_size//2)
+        aug_image = aug_image.squeeze()
+    
+    elif pretext_task == PreextTask.ZOOM_IN:
+        scale_factor = random.uniform(1.2, 1.5)
+        
+        # Add batch and channel dimensions
+        aug_image = aug_image.unsqueeze(0).unsqueeze(0)
+        
+        # Calculate new dimensions
+        h, w = aug_image.shape[-2:]
+        new_h = int(h * scale_factor)
+        new_w = int(w * scale_factor)
+        
+        # Resize using interpolate
+        aug_image = F.interpolate(aug_image, size=(new_h, new_w), mode='bilinear', align_corners=False)
+        
+        # Calculate crop area
+        start_y = (new_h - h) // 2
+        start_x = (new_w - w) // 2
+        aug_image = aug_image[..., start_y:start_y+h, start_x:start_x+w]
+        aug_image = aug_image.squeeze()
+
+    elif pretext_task == PreextTask.ZOOM_OUT:
+        scale_factor = random.uniform(0.6, 0.8)
+        
+        # Add batch and channel dimensions
+        aug_image = aug_image.unsqueeze(0).unsqueeze(0)
+        
+        # Calculate new dimensions
+        h, w = aug_image.shape[-2:]
+        new_h = int(h * scale_factor)
+        new_w = int(w * scale_factor)
+        
+        # Resize using interpolate
+        aug_image = F.interpolate(aug_image, size=(new_h, new_w), mode='bilinear', align_corners=False)
+        
+        # Create padding
+        pad_y = (h - new_h) // 2
+        pad_x = (w - new_w) // 2
+        aug_image = F.pad(aug_image, (pad_x, w - new_w - pad_x, pad_y, h - new_h - pad_y), mode='replicate')
+        aug_image = aug_image.squeeze()
+    
+    # Restore channel dimension if it was present in input
+    if len(original_shape) == 3:
+        aug_image = aug_image.unsqueeze(-1)
+
+    aug_image = aug_image.cpu()
+    torch.cuda.empty_cache()
+    
+    return aug_image, pretext_task.value
 
 class SAMPLEDataset(Dataset):
     def __init__(self, real_root: str, synthetic_root: str, elevation: int = None, transform=None):
@@ -78,14 +247,17 @@ class SAMPLEDataset(Dataset):
         data = []
 
         def process_directory(root_path, is_real):
-            for class_name in self.class_to_idx.keys():
+            for class_name in sorted(self.class_to_idx.keys()):  # Sort class names
                 class_path = root_path / class_name
                 if not class_path.exists():
                     continue
 
-                for img_path in class_path.glob('*.png'):
+                # Get all image paths and sort them
+                image_paths = sorted(list(class_path.glob('*.png')))
+                
+                for img_path in image_paths:
                     metadata = self._parse_filename(img_path.name)
-
+                    
                     if metadata is None:
                         continue
 
@@ -103,6 +275,10 @@ class SAMPLEDataset(Dataset):
 
         process_directory(self.real_root, True)
         process_directory(self.synthetic_root, False)
+        
+        # Sort the entire dataset by class, then azimuth
+        data.sort(key=lambda x: (x['label'], x['azimuth']))
+        
         return data
 
     def __len__(self) -> int:
@@ -113,116 +289,6 @@ class SAMPLEDataset(Dataset):
         image = Image.open(item['path'])
         image = self.transform(image)
         return image, item['label']
-
-class PreextTask(Enum):
-    ORIGINAL = 0
-    ROTATE_90 = 1
-    ROTATE_180 = 2
-    ROTATE_270 = 3
-    BLUR = 4
-    FLIP_HORIZONTAL = 5
-    FLIP_VERTICAL = 6
-    DENOISE = 7
-    ZOOM_IN = 8
-
-def zoom_image(image, scale_factor):
-    """
-    Apply zoom to image with padding or cropping
-    
-    Parameters:
-        image: Input image array
-        scale_factor: > 1 for zoom-in, < 1 for zoom-out
-    """
-    h, w = image.shape[:2]
-    
-    # Calculate new dimensions
-    new_h = int(h * scale_factor)
-    new_w = int(w * scale_factor)
-    
-    if scale_factor > 1:  # Zoom in
-        # Resize image to larger size
-        zoomed = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
-        
-        # Calculate crop area to maintain original size
-        start_y = (new_h - h) // 2
-        start_x = (new_w - w) // 2
-        zoomed = zoomed[start_y:start_y+h, start_x:start_x+w]
-
-    else:  # Zoom out
-        # Resize image to smaller size
-        zoomed = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
-        
-        # Create padding
-        pad_y = (h - new_h) // 2
-        pad_x = (w - new_w) // 2
-
-        zoomed = cv2.copyMakeBorder(
-            zoomed,
-            top=pad_y,
-            bottom=h - new_h - pad_y,
-            left=pad_x,
-            right=w - new_w - pad_x,
-            borderType=cv2.BORDER_REPLICATE
-        )
-
-    return zoomed
-
-def augment_single_image(image, pretext_task):
-    """
-    Apply specific pretext task transformation to image
-    """
-    aug_image = image.copy()
-    original_shape = aug_image.shape
-    
-    # Remove channel dimension for operations that expect 2D input
-    if len(aug_image.shape) == 3:
-        aug_image = aug_image.squeeze()
-    
-    if pretext_task == PreextTask.ORIGINAL:
-        pass
-        
-    elif pretext_task == PreextTask.ROTATE_90:
-        rows, cols = aug_image.shape[:2]
-        M = cv2.getRotationMatrix2D((cols/2, rows/2), 90, 1)
-        aug_image = cv2.warpAffine(aug_image, M, (cols, rows))
-        
-    elif pretext_task == PreextTask.ROTATE_180:
-        rows, cols = aug_image.shape[:2]
-        M = cv2.getRotationMatrix2D((cols/2, rows/2), 180, 1)
-        aug_image = cv2.warpAffine(aug_image, M, (cols, rows))
-        
-    elif pretext_task == PreextTask.ROTATE_270:
-        rows, cols = aug_image.shape[:2]
-        M = cv2.getRotationMatrix2D((cols/2, rows/2), 270, 1)
-        aug_image = cv2.warpAffine(aug_image, M, (cols, rows))
-        
-    elif pretext_task == PreextTask.BLUR:
-        sigma = random.uniform(0.5, 1.0)
-        aug_image = gaussian_filter(aug_image, sigma=sigma)
-        
-    elif pretext_task == PreextTask.FLIP_HORIZONTAL:
-        aug_image = cv2.flip(aug_image, 1)
-        
-    elif pretext_task == PreextTask.FLIP_VERTICAL:
-        aug_image = cv2.flip(aug_image, 0)
-        
-    elif pretext_task == PreextTask.DENOISE:
-        sigma_psd = 25/255
-        aug_image = bm3d.bm3d(aug_image, sigma_psd=sigma_psd)
-    
-    elif pretext_task == PreextTask.ZOOM_IN:
-        scale_factor = random.uniform(1.2, 1.5)  # Zoom in 20-50%
-        aug_image = zoom_image(aug_image, scale_factor)
-        
-    elif pretext_task == PreextTask.ZOOM_OUT:
-        scale_factor = random.uniform(0.6, 0.8)  # Zoom out 20-40%
-        aug_image = zoom_image(aug_image, scale_factor)
-
-    # Restore channel dimension if it was present in input
-    if len(original_shape) == 3:
-        aug_image = aug_image[..., np.newaxis]
-        
-    return aug_image, pretext_task.value
 
 class SelfSupervisedDataset(Dataset):
     def __init__(self, data, transform=None):
@@ -245,11 +311,31 @@ class SelfSupervisedDataset(Dataset):
 
         for task in PreextTask:
             aug_image, task_label = augment_single_image(image_np, task)
+            # aug_tensor = aug_image.cpu()
             aug_tensor = torch.FloatTensor(aug_image).unsqueeze(0)
             augmented_images.append(aug_tensor)
             pretext_labels.append(task_label)
 
-        return torch.stack(augmented_images), torch.tensor(pretext_labels), item['label']
+        # Stack tensors (all on CPU)
+        stacked_images = torch.stack(augmented_images)
+        label_tensor = torch.tensor(pretext_labels)
+        
+        return stacked_images, label_tensor, item['label']
+
+class DownstreamDataset(Dataset):
+    def __init__(self, data, transform=None):
+        self.data = data
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        item = self.data[idx]
+        image = Image.open(item['path'])
+        if self.transform:
+            image = self.transform(image)
+        return image, item['label']
 
 class SARPretrainCNN(nn.Module):
     def __init__(self):
@@ -257,28 +343,28 @@ class SARPretrainCNN(nn.Module):
         # Feature extractor (same as original SARCNN)
         self.features = nn.Sequential(
             nn.Conv2d(1, 16, 3, padding=1),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
             
             nn.Conv2d(16, 32, 3, padding=1),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
             
             nn.Conv2d(32, 64, 3, padding=1),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
             
             nn.Conv2d(64, 128, 3, padding=1),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(2)
         )
         
         # Pretext task classifier
         self.pretext_classifier = nn.Sequential(
             nn.Linear(2048, 1000),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.Linear(1000, 500),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.Linear(500, len(PreextTask))
         )
         
@@ -292,84 +378,162 @@ class SARPretrainCNN(nn.Module):
         pretext_out = self.pretext_classifier(features)
         return pretext_out
 
-def create_data_split(dataset, test_elevation=17, k=1.0):
-    """Modified to only use measured data without synthetic replacement"""
+def setup_directories():
+    """Create necessary directories for the experiment"""
+    try:
+        os.makedirs(EXPERIMENT_BASE_DIR, exist_ok=True)
+        subdirs = {
+            'RESULTS_DIR': RESULTS_DIR,
+            'FIGURES_DIR': FIGURES_DIR
+        }
+        for path in subdirs.values():
+            os.makedirs(path, exist_ok=True)
+        return True
+    except Exception as e:
+        print(f"Error creating directories: {str(e)}")
+        return False
+ 
+def create_data_split_k(dataset, test_elevation=17, k=1.0):
+    """Create train/test split based on k-value per paper equations"""
+    # Get test data
     test_data = [d for d in dataset.data 
                  if d['elevation'] == test_elevation and d['is_real']]
 
-    # Group remaining data by class
+    # Print test distribution
+    test_classes = [d['label'] for d in test_data]
+    print("\nTest data class distribution:")
+    for label, count in Counter(test_classes).items():
+        print(f"Class {label}: {count} samples")
+    
+    # Get training data
     class_data = defaultdict(list)
     for d in dataset.data:
-        if d['elevation'] != test_elevation and d['is_real']:  # Only measured data
+        if d['elevation'] != test_elevation and d['is_real']:
             class_data[d['label']].append(d)
 
-    # Create training data
+    # Print available training data
+    # print("\nAvailable training data before k-selection:")
+    # for label, data in class_data.items():
+    #     print(f"Class {label}: {len(data)} samples")
+                
+    print("\nTraining data selection with k={:.2f}:".format(k))
     training_data = []
-    for class_label, data in class_data.items():
-        Nm_j = len([d for d in dataset.data 
-                   if d['label'] == class_label and d['is_real']])
-        Sm_j = len([d for d in test_data if d['label'] == class_label])
+    for class_label in class_data.keys():
+        available_samples = len(class_data[class_label])
+        # Simply take k portion of available samples
+        samples_to_take = int(np.ceil(k * available_samples))
         
-        # Calculate number of training samples
-        Tm_j = int(k * (Nm_j - Sm_j))
+        print(f"Class {class_label}:", end=' ')
+        print(f"Available samples: {available_samples}", end=' | ')
+        print(f"Taking {samples_to_take} samples (k={k:.2f})")
+        
+        # Take first k portion of the data
+        training_data.extend(class_data[class_label][:samples_to_take])
 
-        training_data.extend(data[:Tm_j])
-
+    # Add to create_data_split_k
+    with open(f"{RESULTS_DIR}/k_{k}_sample_selection.txt", 'w') as f:
+        f.write(f"Samples selected for k={k}:\n")
+        for sample in training_data:
+            f.write(f"Class: {sample['label']}, Azimuth: {sample['azimuth']}, File: {sample['filename']}\n")
+    
     return training_data, test_data
 
+def train_pretext(model, train_loader, optimizer, criterion, device):
+    """GPU-optimized pretext training function with mixed precision"""
+    model.train()
+    epoch_loss = 0
+    batch_count = 0
+    
+    # Move criterion to GPU
+    criterion = criterion.to(device)
+    
+    # Initialize GradScaler for mixed precision training
+    scaler = GradScaler()
+    
+    for batch_imgs, batch_pretext_labels, _ in train_loader:
+        # Pre-allocate tensors on GPU
+        batch_imgs = batch_imgs.view(-1, 1, 64, 64).to(device, non_blocking=True)
+        batch_pretext_labels = batch_pretext_labels.view(-1).to(device, non_blocking=True)
+        
+        # Zero grad with set_to_none for better performance
+        optimizer.zero_grad(set_to_none=True)
+        
+        # Mixed precision training
+        with autocast():
+            outputs = model(batch_imgs)
+            loss = criterion(outputs, batch_pretext_labels)
+        
+        # Scale and backpropagate loss
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        
+        epoch_loss += loss.item()
+        batch_count += 1
+        
+        # Optional: Clear cache periodically if memory is an issue
+        if batch_count % 100 == 0:
+            torch.cuda.empty_cache()
+    
+    return epoch_loss / batch_count
+
 def extract_features(model, dataloader, device):
+    """GPU-optimized feature extraction"""
     model.eval()
     features = []
     labels = []
     
-    with torch.no_grad():
-        for batch_imgs, _, batch_labels in dataloader:
-            # Get original images only (first augmentation)
-            orig_imgs = batch_imgs[:, 0].to(device)
-            batch_features = model(orig_imgs, return_features=True)
-            features.append(batch_features.cpu().numpy())
-            labels.extend(batch_labels.numpy())
-            
-    return np.vstack(features), np.array(labels)
-
-# Define global hyperparameters
-hyperparameters = {
-    'rf_n_estimators': 100,
-    'svm_kernel': 'linear',
-    'gb_n_estimators': 100,
-    'xgb_n_estimators': 100,
-    'cv_splits': 5,
-    'random_seed': 42
-}
+    # Pre-allocate GPU memory for batches
+    with torch.no_grad(), torch.cuda.amp.autocast():  # Enable automatic mixed precision
+        for images, class_labels in dataloader:
+            images = images.to(device, non_blocking=True)
+            batch_features = model(images, return_features=True)
+            # Keep features on GPU until batch is complete
+            features.append(batch_features)
+            labels.extend(class_labels.numpy())
+    
+    # Concatenate all features on GPU first, then move to CPU
+    features = torch.cat(features, dim=0)
+    features_np = features.cpu().numpy()
+    
+    return features_np, np.array(labels)
 
 def train_downstream_classifiers(train_features, train_labels, test_features, test_labels):
-    """
-    Train and evaluate multiple classifiers with specified hyperparameters.
-    
-    Args:
-        train_features: Training feature matrix
-        train_labels: Training labels
-        test_features: Test feature matrix
-        test_labels: Test labels
-        
-    Returns:
-        results: Dictionary containing evaluation metrics for each classifier
-        trained_classifiers: Dictionary containing trained classifier objects
-    """
+    """Train and evaluate downstream classifiers"""
     results = {}
     trained_classifiers = {}
     
-    # Scale features
+    # First move everything to CPU and convert to numpy
+    if torch.is_tensor(train_features):
+        train_features = train_features.cpu().numpy()
+    if torch.is_tensor(test_features):
+        test_features = test_features.cpu().numpy()
+    if torch.is_tensor(train_labels):
+        train_labels = train_labels.cpu().numpy()
+    if torch.is_tensor(test_labels):
+        test_labels = test_labels.cpu().numpy()
+    
     scaler = StandardScaler()
     train_features_scaled = scaler.fit_transform(train_features)
     test_features_scaled = scaler.transform(test_features)
     
-    # Initialize classifiers with hyperparameters
     classifiers = {
+        'xgboost': xgb.XGBClassifier(
+            n_estimators=hyperparameters['xgb_n_estimators'],
+            random_state=hyperparameters['random_seed'],
+            use_label_encoder=False,
+            tree_method='gpu_hist',  # Only use if you have CUDA toolkit installed
+            predictor='gpu_predictor',
+            gpu_id=0,
+            verbose=0,
+            objective='multi:softprob',
+            num_class=10
+        ),
         'random_forest': RandomForestClassifier(
             n_estimators=hyperparameters['rf_n_estimators'],
             random_state=hyperparameters['random_seed'],
             verbose=0,
+            n_jobs=-1
         ),
         'svm': SVC(
             kernel=hyperparameters['svm_kernel'],
@@ -381,26 +545,32 @@ def train_downstream_classifiers(train_features, train_labels, test_features, te
             n_estimators=hyperparameters['gb_n_estimators'],
             random_state=hyperparameters['random_seed'],
             verbose=0
-        ),
-        'xgboost': xgb.XGBClassifier(
-            n_estimators=hyperparameters['xgb_n_estimators'],
-            random_state=hyperparameters['random_seed'],
-            use_label_encoder=False,  # For newer XGBoost versions
-            verbose=0
         )
     }
     
-    # Train and evaluate each classifier
     for name, clf in classifiers.items():
         print(f"\nTraining {name}...")
         try:
-            # Train the classifier
-            clf.fit(train_features_scaled, train_labels)
+            if name == 'xgboost':
+                try:
+                    # Try GPU-enabled XGBoost
+                    clf.fit(train_features_scaled, train_labels)
+                except (ImportError, Exception) as e:
+                    print(f"GPU training failed for XGBoost: {str(e)}")
+                    print("Falling back to CPU XGBoost...")
+                    # Fall back to CPU XGBoost
+                    clf = xgb.XGBClassifier(
+                        n_estimators=hyperparameters['xgb_n_estimators'],
+                        random_state=hyperparameters['random_seed'],
+                        use_label_encoder=False,
+                        verbose=0,
+                        objective='multi:softprob',
+                        num_class=10
+                    )
             
-            # Make predictions
+            clf.fit(train_features_scaled, train_labels)
             y_pred = clf.predict(test_features_scaled)
             
-            # Calculate metrics
             metrics = {
                 'accuracy': accuracy_score(test_labels, y_pred),
                 'precision': precision_score(test_labels, y_pred, average='macro'),
@@ -409,14 +579,13 @@ def train_downstream_classifiers(train_features, train_labels, test_features, te
                 'confusion_matrix': confusion_matrix(test_labels, y_pred)
             }
             
-            # Store results and trained classifier
             results[name] = metrics
             trained_classifiers[name] = clf
             
-            print(f"{name} Accuracy: {metrics['accuracy']:.2f}")
-            print(f"{name} Precision: {metrics['precision']:.2f}")
-            print(f"{name} Recall: {metrics['recall']:.2f}")
-            print(f"{name} F1: {metrics['f1']:.2f}")
+            print(f"{name} Metrics:")
+            for metric_name, value in metrics.items():
+                if metric_name != 'confusion_matrix':
+                    print(f"{metric_name}: {value:.4f}")
             
         except Exception as e:
             print(f"Error training {name}: {str(e)}")
@@ -426,155 +595,7 @@ def train_downstream_classifiers(train_features, train_labels, test_features, te
     
     return results, trained_classifiers, test_features_scaled, test_labels
 
-def run_self_supervised_experiment(real_root, synthetic_root, test_elevation=17, n_runs=5):
-    """
-    Run self-supervised learning experiment with multiple classifiers and evaluations
-    """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    k_values = np.arange(0.05, 1.05, 0.05)
-    results = defaultdict(list)
-    
-    # Store detailed metrics for each k value
-    detailed_metrics = defaultdict(lambda: defaultdict(list))
-    
-    dataset = SAMPLEDataset(real_root, synthetic_root)
-    
-    print(f'DEVICE STATUS: {device}')
-    total_steps = len(k_values) * n_runs
-    step = 0
-    
-    for k in k_values:
-        print(f"\n{'='*50}")
-        print(f"Processing k={k:.2f} ({k_values.tolist().index(k)+1}/{len(k_values)})")
-        print(f"{'='*50}")
-        
-        k_results = defaultdict(list)
-        
-        for run in range(n_runs):
-            step += 1
-            print(f"\nRun {run+1}/{n_runs} (Overall progress: {step}/{total_steps})")
-            
-            # Create k-based split
-            train_data, test_data = create_data_split_k(dataset, test_elevation, k)
-            print(f"Training with {len(train_data)} samples, Testing with {len(test_data)} samples")
-            
-            # Create self-supervised datasets
-            train_dataset = SelfSupervisedDataset(train_data, dataset.transform)
-            test_dataset = SelfSupervisedDataset(test_data, dataset.transform)
-            
-            train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4, pin_memory=True)
-            test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
-            
-            # Train pretext model
-            pretext_model = SARPretrainCNN().to(device)
-            optimizer = optim.Adam(pretext_model.parameters(), lr=0.001)
-            criterion = nn.CrossEntropyLoss()
-            
-            # Pretext task training
-            total_epochs = 60
-            for epoch in range(total_epochs):
-                model.train()
-                epoch_loss = 0
-                batch_count = 0
-
-                if epoch % 10 == 0:  # Print every 10 epochs
-                    print(f"Epoch {epoch}/{total_epochs}")
-
-                for batch_idx, (batch_imgs, batch_pretext_labels, _) in enumerate(train_loader):
-                    batch_imgs = batch_imgs.view(-1, 1, 64, 64).to(device)
-                    batch_pretext_labels = batch_pretext_labels.view(-1).to(device)
-                    
-                    optimizer.zero_grad()
-                    outputs = model(batch_imgs)
-                    loss = criterion(outputs, batch_pretext_labels)
-                    loss.backward()
-                    optimizer.step()
-                    
-                    epoch_loss += loss.item()
-                    batch_count += 1
-
-                if epoch % 10 == 0:  # Print loss every 10 epochs
-                    avg_loss = epoch_loss / batch_count
-                    print(f"Average loss: {avg_loss:.4f}")
-                
-            # Extract features for downstream task
-            train_features, train_labels = extract_features(pretext_model, train_loader, device)
-            test_features, test_labels = extract_features(pretext_model, test_loader, device)
-            
-            # Train and evaluate downstream classifiers with new function
-            clf_results, trained_clfs, test_features_scaled, test_labels = train_downstream_classifiers(
-                train_features, train_labels,
-                test_features, test_labels
-            )
-            
-            # Generate ROC curves and additional metrics
-            for clf_name, clf in trained_clfs.items():
-                if clf is not None:
-                    metrics = evaluate_downstream_task(
-                        clf,
-                        test_features_scaled,
-                        test_labels,
-                        pretext_classifier='cnn',
-                        k_value=k,
-                        exp_id=EXP_ID,
-                        save_dir=FIGURES_DIR
-                    )
-                    
-                    # Store metrics
-                    for metric_name, value in metrics.items():
-                        if metric_name != 'confusion_matrix':  # Don't store large arrays
-                            detailed_metrics[k][f"{clf_name}_{metric_name}"].append(value)
-                    
-                    # Store accuracy for main results
-                    k_results[clf_name].append(metrics['accuracy'])
-            
-            # Save confusion matrices for k=0 and k=1 cases
-            if k in [0.0, 1.0]:
-                for clf_name, results in clf_results.items():
-                    if results is not None:
-                        plot_confusion_matrices(
-                            results,
-                            k,
-                            f"{FIGURES_DIR}/conf_matrix_k{k}_{clf_name}.png"
-                        )
-        
-        # Average results for this k
-        for clf_name in k_results.keys():
-            avg_accuracy = np.mean(k_results[clf_name])
-            results[clf_name].append(avg_accuracy)
-            print(f"\nk={k:.2f}, {clf_name} Average Accuracy: {avg_accuracy:.4f}")
-    
-    # Plot results similar to Figure 4
-    plot_k_results(k_values, results, f"{FIGURES_DIR}/k_accuracy.png")
-    
-    # Save detailed metrics
-    save_detailed_metrics(detailed_metrics, k_values, f"{RESULTS_DIR}/detailed_metrics.json")
-    
-    return k_values, results, detailed_metrics
-
-def save_detailed_metrics(metrics, k_values, filepath):
-    """Save detailed metrics to JSON file"""
-    output = {
-        'k_values': k_values.tolist(),
-        'metrics': {str(k): v for k, v in metrics.items()}
-    }
-    
-    with open(filepath, 'w') as f:
-        json.dump(output, f, cls=NumpyEncoder)
-
-def plot_k_results(k_values, results, save_path):
-    plt.figure(figsize=(12, 8))
-    for clf_name, accuracies in results.items():
-        plt.plot(k_values, accuracies, label=clf_name, marker='o')
-    plt.xlabel('Fraction of Measured Training Data (k)')
-    plt.ylabel('Classification Accuracy (%)')
-    plt.title('Self-Supervised Learning Results')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(save_path)
-    plt.close()
-
-def evaluate_downstream_task(clf, X_test, y_test, pretext_classifier, k_value, exp_id, save_dir=FIGURES_DIR):
+def evaluate_downstream_task(clf, X_test, y_test, pretext_classifier, k_value, exp_id, run_number, save_dir=FIGURES_DIR):
     """
     Evaluate downstream classifier with ROC curves and metrics
     """
@@ -604,7 +625,7 @@ def evaluate_downstream_task(clf, X_test, y_test, pretext_classifier, k_value, e
         return metrics
 
     # Define FPR thresholds of interest
-    fpr_thresholds = [0.01, 0.05, 0.10, 0.20, 0.25]
+    fpr_thresholds = [0.01, 0.05, 0.10, 0.15, 0.20, 0.25]
     
     plt.figure(figsize=(10, 8))
     
@@ -628,78 +649,81 @@ def evaluate_downstream_task(clf, X_test, y_test, pretext_classifier, k_value, e
             tpr_at_thresholds[threshold] = tpr[idx]
             plt.plot(fpr[idx], tpr[idx], 'ro', label=f'TPR at {threshold*100}% FPR = {tpr[idx]:.3f}')
         
+        # CHANGE 1: Update metrics with string keys for binary case
         metrics.update({
             'roc_auc': roc_auc,
-            'fpr': fpr,
-            'tpr': tpr,
-            'tpr_at_thresholds': tpr_at_thresholds
+            'tpr_at_thresholds': {str(k): v for k, v in tpr_at_thresholds.items()}
         })
+
     else:
         # Multiclass case
         if has_proba:
             y_scores = clf.predict_proba(X_test)
         else:
             decision_values = clf.decision_function(X_test)
-            if decision_values.ndim > 1:  # OvO case
+            if decision_values.ndim > 1:
                 y_scores = np.exp(decision_values) / np.sum(np.exp(decision_values), axis=1, keepdims=True)
-            else:  # OvR case
+            else:
                 y_scores = np.column_stack([1 - decision_values, decision_values])
 
-        # Compute ROC curve and ROC area for each class
-        fpr = dict()
-        tpr = dict()
-        roc_auc = dict()
-        tpr_at_thresholds = dict()
-        
         y_test_bin = label_binarize(y_test, classes=np.unique(y_test))
         
+        # Initialize dictionaries
+        fpr = dict()
+        tpr = dict()
+
+        # Compute ROC curve and ROC area for each class
+        class_names = ['2S1', 'BMP2', 'BTR70', 'M1', 'M2', 'M35', 'M548', 'M60', 'T72', 'ZSU23']
+        class_colors = plt.cm.tab10(np.linspace(0, 1, n_classes))
+        
+        # Calculate ROC for each class
         for i in range(n_classes):
             fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], y_scores[:, i])
-            roc_auc[i] = auc(fpr[i], tpr[i])
+            roc_auc_class = auc(fpr[i], tpr[i])
             
+            # Plot individual class ROC curves
             plt.plot(
                 fpr[i], 
                 tpr[i], 
-                lw=2, 
-                label=f'ROC Class {i} (AUC = {roc_auc[i]:.4f})'
+                color=class_colors[i],
+                lw=1,  # thinner lines for class curves
+                label=f'{class_names[i]} (AUC = {roc_auc_class:.4f})'
             )
-            
-            # Calculate TPR at specific FPR thresholds for each class
-            tpr_at_thresholds[i] = {}
-            for threshold in fpr_thresholds:
-                idx = np.argmin(np.abs(fpr[i] - threshold))
-                tpr_at_thresholds[i][threshold] = tpr[i][idx]
-                plt.plot(fpr[i][idx], tpr[i][idx], 'ro')
-
-        # Compute micro-average ROC curve and ROC area
+        
+        # Compute micro-average ROC curve
         fpr["micro"], tpr["micro"], _ = roc_curve(
             y_test_bin.ravel(), 
             y_scores.ravel()
         )
-        roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
+        roc_auc = auc(fpr["micro"], tpr["micro"])
         
         plt.plot(
             fpr["micro"], 
             tpr["micro"],
-            label=f'micro-average ROC curve (AUC = {roc_auc["micro"]:.4f})',
+            label=f'micro-average ROC curve (AUC = {roc_auc:.4f})',
             color='deeppink', 
             linestyle=':', 
-            linewidth=4
+            linewidth=3
         )
         
         # Calculate TPR at specific FPR thresholds for micro-average
-        tpr_at_thresholds["micro"] = {}
+        tpr_at_thresholds = {}
         for threshold in fpr_thresholds:
             idx = np.argmin(np.abs(fpr["micro"] - threshold))
-            tpr_at_thresholds["micro"][threshold] = tpr["micro"][idx]
+            tpr_at_thresholds[threshold] = tpr["micro"][idx]
             plt.plot(fpr["micro"][idx], tpr["micro"][idx], 'ro', 
                     label=f'Micro-avg TPR at {threshold*100}% FPR = {tpr["micro"][idx]:.3f}')
         
+        # CHANGE 2: Update metrics with nested structure for multiclass case
+        # Calculate per-class AUC values
+        class_auc = {}
+        for i in range(n_classes):
+            class_auc[class_names[i]] = auc(fpr[i], tpr[i])
+        
         metrics.update({
-            'roc_auc': roc_auc["micro"],
-            'fpr': fpr["micro"],
-            'tpr': tpr["micro"],
-            'tpr_at_thresholds': tpr_at_thresholds
+            'roc_auc': roc_auc,  # micro-average AUC
+            'roc_auc_per_class': class_auc,  # per-class AUC values
+            'tpr_at_thresholds': {'micro': {str(k): v for k, v in tpr_at_thresholds.items()}}
         })
 
     # Complete the ROC plot
@@ -708,7 +732,7 @@ def evaluate_downstream_task(clf, X_test, y_test, pretext_classifier, k_value, e
     plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title(f"{exp_id}-k_{k_value}-{pretext_classifier}-{clf_name}-ROC")
+    plt.title(f"{exp_id}-k_{k_value:.2f}-run_{run_number}-{pretext_classifier}-{clf_name}-ROC")
     plt.legend(loc="center left", bbox_to_anchor=(1, 0.5))
     plt.tight_layout()
     
@@ -717,20 +741,17 @@ def evaluate_downstream_task(clf, X_test, y_test, pretext_classifier, k_value, e
     plt.savefig(
         os.path.join(
             save_dir, 
-            f"{exp_id}-k_{k_value}-{pretext_classifier}-{clf_name}-roc.png"
+            f"{exp_id}-k_{k_value:.2f}-run_{run_number}-{pretext_classifier}-{clf_name}-roc.png"
         ),
         bbox_inches='tight'
     )
     plt.close()
-
+    
     return metrics
 
 def plot_confusion_matrices(results, k, save_path):
     """Plot and save confusion matrices"""
-    y_true = results['true_labels']
-    y_pred = results['predictions']
-    
-    cm = confusion_matrix(y_true, y_pred)
+    cm = results['confusion_matrix']
     plt.figure(figsize=(10, 8))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
     plt.title(f'Confusion Matrix (k={k:.2f})')
@@ -739,159 +760,372 @@ def plot_confusion_matrices(results, k, save_path):
     plt.savefig(save_path)
     plt.close()
 
-class SARCNN(nn.Module):
-    def __init__(self):
-        super(SARCNN, self).__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(1, 16, 3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-
-            nn.Conv2d(16, 32, 3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-
-            nn.Conv2d(32, 64, 3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-
-            nn.Conv2d(64, 128, 3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2)
-        )
-
-        self.classifier = nn.Sequential(
-            nn.Linear(2048, 1000),
-            nn.ReLU(),
-            nn.Linear(1000, 500),
-            nn.ReLU(),
-            nn.Linear(500, 250),
-            nn.ReLU(),
-            nn.Linear(250, 10)
-        )
-
-    def forward(self, x):
-        x = self.features(x)
-        x = x.view(x.size(0), -1)
-        x = self.classifier(x)
-        return x
-
-def evaluate_model(model, test_loader, device):
-    model.eval()
-    correct = 0
-    total = 0
-    all_preds = []
-    all_labels = []
-
-    with torch.no_grad():
-        for imgs, labels in test_loader:
-            imgs = imgs.to(device)
-            labels = labels.to(device)
-            outputs = model(imgs)
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-
-            all_preds.extend(predicted.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-
-    accuracy = 100 * correct / total
-    return accuracy, all_preds, all_labels
-
-def train_model(model, train_loader, test_loader, device, epochs=60):
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-
-    for epoch in range(epochs):
-        model.train()
-        for batch_imgs, batch_labels in train_loader:
-            batch_imgs = batch_imgs.to(device)
-            batch_labels = batch_labels.to(device)
-
-            optimizer.zero_grad()
-            outputs = model(batch_imgs)
-            loss = criterion(outputs, batch_labels)
-            loss.backward()
-            optimizer.step()
-
-        if epoch % 10 == 0:
-            accuracy = evaluate_model(model, test_loader, device)[0]
-            print(f'Epoch {epoch}, Test Accuracy: {accuracy:.2f}%')
-
-def setup_directories():
-    try:
-        # Create base experiment directory
-        if not os.path.exists(EXPERIMENT_BASE_DIR):
-            os.makedirs(EXPERIMENT_BASE_DIR)
-
-        # Create subdirectories
-        subdirs = {
-            'MODEL_DIR': MODEL_DIR,
-            'DATA_DIR': DATA_DIR,
-            'RESULTS_DIR': RESULTS_DIR,
-            'FIGURES_DIR': FIGURES_DIR
-        }
-
-        for name, path in subdirs.items():
-            if not os.path.exists(path):
-                os.makedirs(path)
-
-        return True
-    except Exception as e:
-        print(f"Error creating directories: {str(e)}")
-        return False
+def plot_confusion_matrices_2(results, k, save_path):
+    """Plot and save confusion matrices with both counts and percentages"""
+    cm = results['confusion_matrix']
     
+    # Calculate percentages
+    cm_percent = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+    
+    plt.figure(figsize=(12, 10))
+    
+    class_labels = ['2S1', 'BMP2', 'BTR70', 'M1', 'M2', 'M35', 'M548', 'M60', 'T72', 'ZSU23']
+    
+    # Create a copy of cm_percent for displaying but replacing 0 with actual 0.00
+    display_cm = np.zeros_like(cm_percent)
+    annotations = []
+    for i in range(cm.shape[0]):
+        row_annotations = []
+        for j in range(cm.shape[1]):
+            if cm[i, j] == 0:
+                row_annotations.append(f'0.00\n0')
+                display_cm[i, j] = 0
+            else:
+                row_annotations.append(f'{cm_percent[i, j]:.2f}\n{cm[i, j]}')
+                display_cm[i, j] = cm_percent[i, j]
+        annotations.append(row_annotations)
+    
+    annotations = np.array(annotations)
+    
+    # Create heatmap with both percentage colors and count annotations
+    sns.heatmap(display_cm, annot=annotations, fmt='', cmap='Blues',
+                xticklabels=class_labels, 
+                yticklabels=class_labels,
+                annot_kws={'size': 10})
+    
+    plt.title(f'Confusion Matrix (k={k:.2f}, Accuracy: {results["accuracy"]:.2%})')
+    plt.xlabel('Predicted label')
+    plt.ylabel('True label')
+    
+    # Adjust layout
+    plt.tight_layout()
+    
+    plt.savefig(save_path, bbox_inches='tight', dpi=300)
+    plt.close()
+
+def plot_k_results(k_values, results, detailed_metrics, save_path):
+    """Plot k vs accuracy results with error bars from multiple runs"""
+    plt.figure(figsize=(12, 8))
+    
+    for clf_name, accuracies in results.items():
+        accuracies = np.array(accuracies)
+        mean_acc = np.mean(accuracies, axis=1)
+        std_acc = np.std(accuracies, axis=1)
+        
+        plt.plot(k_values, mean_acc, label=f'{clf_name} (mean)', marker='o')
+        plt.fill_between(k_values, 
+                        mean_acc - std_acc, 
+                        mean_acc + std_acc, 
+                        alpha=0.2)
+    
+    plt.xlabel('Fraction of Measured Training Data (k)')
+    plt.ylabel('Classification Accuracy (%)')
+    plt.title('Self-Supervised Learning Results (with std dev)')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(save_path)
+    plt.close()
+
+def save_detailed_metrics(metrics, k_values, filepath):
+    """Save detailed metrics with reduced TPR/FPR data"""
+    output = {
+        'k_values': k_values.tolist(),
+        'metrics': {}
+    }
+
+    for k, v in metrics.items():
+        output['metrics'][str(k)] = {
+            'per_run': {},
+            'mean': {},
+            'std': {}
+        }
+        
+        for metric_name, values in v.items():
+            # CHANGE 3: Skip storing raw TPR/FPR arrays to reduce JSON size
+            if metric_name.endswith('_fpr') or metric_name.endswith('_tpr'):
+                continue
+                
+            # Store other metrics
+            output['metrics'][str(k)]['per_run'][metric_name] = values
+            
+            if isinstance(values[0], (int, float, np.number)):
+                output['metrics'][str(k)]['mean'][metric_name] = float(np.mean(values))
+                output['metrics'][str(k)]['std'][metric_name] = float(np.std(values))
+            else:
+                output['metrics'][str(k)]['mean'][metric_name] = values[0]
+                output['metrics'][str(k)]['std'][metric_name] = 0
+
+    # Save to file
+    with open(filepath, 'w') as f:
+        json.dump(output, f, cls=NumpyEncoder, indent=2)
+
+def run_self_supervised_experiment(real_root, synthetic_root, test_elevation=17, n_runs=2):
+    """Main experiment function"""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f'[DEVICE] {device}')
+
+    k_values = np.arange(0.05, 1.05, 0.05) # 0.05, 1.05, 0.05
+    results = defaultdict(lambda: defaultdict(list))
+    detailed_metrics = defaultdict(lambda: defaultdict(list))
+
+    dataset = SAMPLEDataset(real_root, synthetic_root)
+
+    total_steps = len(k_values) * n_runs
+    step = 0
+    
+    for k_idx, k in enumerate(k_values):
+        print(f"\n{'='*125}")
+        print(f"Processing k={k:.2f} ({k_idx+1}/{len(k_values)})")
+        print(f"{'='*125}")
+        
+        k_results = defaultdict(list)
+        
+        for run in range(n_runs):
+            step += 1
+            print(f"\n-------------------------------------- Run {run+1}/{n_runs} (Overall progress: {step}/{total_steps})  --------------------------------------------------------- ")
+            
+            # Create k-based split
+            train_data, test_data = create_data_split_k(dataset, test_elevation, k)
+            print(f"\nTraining with {len(train_data)} samples, Testing with {len(test_data)} samples")
+
+            # Create two different datasets:
+            # 1. For pretext task training (with augmentations)
+            pretext_train_dataset = SelfSupervisedDataset(train_data, dataset.transform)
+            pretext_train_loader = DataLoader(
+                pretext_train_dataset, 
+                batch_size=hyperparameters['batch_size'], 
+                shuffle=True, 
+                pin_memory=True,
+                num_workers=4,  
+                prefetch_factor=2
+            )
+
+            # 2. For feature extraction (without augmentations)
+            downstream_train_dataset = DownstreamDataset(train_data, dataset.transform)
+            downstream_test_dataset = DownstreamDataset(test_data, dataset.transform)
+            
+            downstream_train_loader = DataLoader(
+                downstream_train_dataset, 
+                batch_size= hyperparameters['batch_size'],
+                shuffle=True,
+                pin_memory=True,
+                num_workers=4,  
+                prefetch_factor=2
+            )
+            downstream_test_loader = DataLoader(
+                downstream_test_dataset, 
+                batch_size=hyperparameters['batch_size'], 
+                shuffle=False,
+                num_workers=4,  
+                prefetch_factor=2
+            )
+            
+            # Train pretext model
+            pretext_model = SARPretrainCNN().to(device)
+            optimizer = optim.Adam(pretext_model.parameters(), lr=0.001)
+            criterion = nn.CrossEntropyLoss()
+            
+            # Pretext task training
+            for epoch in range(60):
+                avg_loss = train_pretext(pretext_model, pretext_train_loader, optimizer, criterion, device)
+                if epoch % 10 == 0:
+                    print(f"Epoch {epoch}, Average loss: {avg_loss:.4f}")
+                
+            # Extract features using original images only
+            train_features, train_labels = extract_features(
+                pretext_model, 
+                downstream_train_loader,  # Using non-augmented loader
+                device
+            )
+            test_features, test_labels = extract_features(
+                pretext_model, 
+                downstream_test_loader,   # Using non-augmented loader
+                device
+            )
+            
+            # Train and evaluate downstream classifiers
+            clf_results, trained_clfs, test_features_scaled, test_labels = train_downstream_classifiers(
+                train_features, train_labels,
+                test_features, test_labels
+            )
+            
+            # Generate ROC curves and additional metrics
+            for clf_name, clf in trained_clfs.items():
+                if clf is not None:
+                    metrics = evaluate_downstream_task(
+                        clf,
+                        test_features_scaled,
+                        test_labels,
+                        pretext_classifier='cnn',
+                        k_value=k,
+                        exp_id=EXP_ID,
+                        run_number=run,
+                        save_dir=FIGURES_DIR
+                    )
+                    
+                    for metric_name, value in metrics.items():
+                        if metric_name != 'confusion_matrix':
+                            detailed_metrics[k][f"{clf_name}_{metric_name}"].append(value)
+                    
+                    k_results[clf_name].append(metrics['accuracy'])
+            
+            # Save confusion matrices for k=0 and k=1 cases
+            # if k in [0.05, 1.0]:
+            for clf_name, clf_results in clf_results.items():
+                if clf_results is not None:
+                    plot_confusion_matrices(
+                        clf_results,
+                        k,
+                        f"{FIGURES_DIR}/{EXP_ID}-conf_matrix_k_{k:.2f}_run_{run}_{clf_name}.png"
+                    )
+                    plot_confusion_matrices_2(
+                        clf_results,
+                        k,
+                        f"{FIGURES_DIR}/{EXP_ID}-conf_matrix_k_{k:.2f}_run_{run}_{clf_name}-2.png"
+                    )
+        
+        # After all runs for this k value, store in main results dictionary
+        for clf_name, accuracies in k_results.items():
+            results[clf_name][k] = accuracies  # Store k_results in main results
+            
+        # Print average results for this k
+        print(f"\nResults for k={k:.2f}:")
+        for clf_name, accuracies in k_results.items():
+            mean_acc = np.mean(accuracies)
+            std_acc = np.std(accuracies)
+            print(f"{clf_name}:")
+            print(f"  Mean Accuracy: {mean_acc:.4f} ± {std_acc:.4f}")
+            
+            # Print ROC metrics if they exist
+            roc_key = f"{clf_name}_roc_auc"
+            if roc_key in detailed_metrics[k]:
+                auc_values = detailed_metrics[k][roc_key]
+                mean_auc = np.mean(auc_values)
+                std_auc = np.std(auc_values)
+                print(f"  Mean AUC: {mean_auc:.4f} ± {std_auc:.4f}")
+                
+                # CHANGE 4: Updated TPR calculation to handle both binary and multiclass cases
+                tpr_key = f"{clf_name}_tpr_at_thresholds"
+                if tpr_key in detailed_metrics[k]:
+                    print("  Mean Micro-average TPR at FPR thresholds:")
+                    tpr_values = detailed_metrics[k][tpr_key]
+                    for fpr_threshold in [0.01, 0.05, 0.10, 0.15, 0.20, 0.25]:
+                        # Extract TPR values for this threshold across all runs
+                        threshold_tprs = []
+                        for run_tprs in tpr_values:
+                            if isinstance(run_tprs, dict):
+                                # If multiclass, get micro average TPRs
+                                if 'micro' in run_tprs:
+                                    micro_tprs = run_tprs.get('micro', {})
+                                    closest_threshold = min(
+                                        [float(t) for t in micro_tprs.keys()], 
+                                        key=lambda x: abs(x - fpr_threshold)
+                                    )
+                                    threshold_tprs.append(micro_tprs[str(closest_threshold)])
+                                else:
+                                    # For binary classification
+                                    closest_threshold = min(
+                                        [float(t) for t in run_tprs.keys()], 
+                                        key=lambda x: abs(x - fpr_threshold)
+                                    )
+                                    threshold_tprs.append(run_tprs[str(closest_threshold)])
+                        
+                        if threshold_tprs:
+                            mean_tpr = np.mean(threshold_tprs)
+                            std_tpr = np.std(threshold_tprs)
+                            print(f"    FPR {fpr_threshold:.2f}: TPR = {mean_tpr:.4f} ± {std_tpr:.4f}")
+
+    # Convert results to format needed for plotting
+    final_results = {clf_name: [values[k] for k in k_values] 
+                    for clf_name, values in results.items()}
+    
+    # Plot results with error bars
+    plot_k_results(k_values, final_results, detailed_metrics, f"{FIGURES_DIR}/{EXP_ID}-k_accuracy.png")
+    
+    # Save detailed metrics
+    save_detailed_metrics(detailed_metrics, k_values, f"{RESULTS_DIR}/{EXP_ID}-detailed_metrics-411.json")
+    
+    return k_values, results, detailed_metrics
+
 class MultiWriter:
     def __init__(self, filename):
         self.log = open(filename, 'w', encoding='utf-8')
+        self.terminal = sys.stdout
 
     def write(self, message):
-        # Write to the file
+        self.terminal.write(message)
         self.log.write(message)
         self.log.flush()
 
-        # Write to the notebook cell output without recursion
-        with self.out:
-            self.out.append_stdout(message)  # Avoids calling print()
-
     def flush(self):
+        self.terminal.flush()
         self.log.flush()
 
 if __name__ == "__main__":
-    # First ensure directories exist
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
+    
+    # Ensure directories exist
     if not setup_directories():
         print("Failed to create necessary directories. Exiting.")
         sys.exit(1)
 
+    # Setup logging
     timestamp = datetime.now().strftime('%Y-%m-%d-%Hh-%Mm-%Ss')
-    filename = os.path.join(RESULTS_DIR, f"{EXP_ID}-07.04.1.1.txt")
+    filename = os.path.join(RESULTS_DIR, f"{EXP_ID}-log-411.txt")
     print(f"> Output will be saved to: {filename}")
-    
-    try:
-        sys.stdout = MultiWriter(filename)
-        real_root = '/mnt/d/SAMPLE_dataset_public/png_images/qpm/real'
-        synthetic_root = '/mnt/d/SAMPLE_dataset_public/png_images/qpm/synth'
-        # k_values, accuracies, class_accuracies = run_experiment_4_1(real_root, synthetic_root)
-        start_time = datetime.now()
-        k_values, results = run_self_supervised_experiment(real_root, synthetic_root)
-        end_time = datetime.now()
 
+    try:
+        # Setup logging
+        # original_stdout = sys.stdout
+        sys.stdout = MultiWriter(filename)
+
+        # Define paths
+        real_root = '/home/arni-linux/pytorch_project/SAMPLE_dataset_public/png_images/qpm/real'
+        synthetic_root = '/home/arni-linux/pytorch_project/SAMPLE_dataset_public/png_images/qpm/synth'
+
+        # Run experiment and time it
+        print(f"=== Starting Experiment {EXP_ID} ===")
+        print(f"Start Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # Run self supervised experiment
+        start_time = datetime.now()
+        k_values, results, detailed_metrics = run_self_supervised_experiment(real_root, synthetic_root)
+        end_time = datetime.now()
+        
+        # Calculate and print duration
         duration = end_time - start_time
-        print(f"\nStart Time: {start_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")  # Show milliseconds
-        print(f"End Time: {end_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")      # Show milliseconds
-        # Formatting duration as hh:mm:ss.sss
-        total_seconds = duration.total_seconds()
-        hours, remainder = divmod(total_seconds, 3600)
+        hours, remainder = divmod(duration.total_seconds(), 3600)
         minutes, seconds = divmod(remainder, 60)
-        milliseconds = duration.microseconds // 1000
-        print(f"Duration: {int(hours):02}:{int(minutes):02}:{int(seconds):02}.{milliseconds:03}")
-        print("\n=== Experiment Finished Successfully ===")
+        
+        print("\n=== Experiment Complete ===")
+        print(f"End Time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Duration: {int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}")
+        
+        # Save final results
+        final_results = {
+            'k_values': k_values.tolist(),
+            'classifier_results': results,
+            'detailed_metrics': detailed_metrics,
+            'experiment_info': {
+                'start_time': start_time.isoformat(),
+                'end_time': end_time.isoformat(),
+                'duration_seconds': duration.total_seconds(),
+                'hyperparameters': hyperparameters
+            }
+        }
+        
+        with open(os.path.join(RESULTS_DIR, f"{EXP_ID}_final_results-411.json"), 'w') as f:
+            json.dump(final_results, f, cls=NumpyEncoder, indent=2)
+        
+        print(f"\n=== Results Saved Successfully of Experiment {EXP_ID} ===")
     except Exception as e:
         print(f"\nError occurred: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        print(traceback.print_exc())
     finally:
-        # Make sure to restore stdout and close the file
+        # Restore stdout and close log file
         if isinstance(sys.stdout, MultiWriter):
             sys.stdout.log.close()
         sys.stdout = sys.__stdout__
