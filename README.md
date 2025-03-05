@@ -1,121 +1,152 @@
-# Self-Supervised Learning on SAMPLE Dataset
-A deep learning implementation for self-supervised learning using rotation prediction as a pretext task on the SAMPLE dataset, followed by downstream classification tasks.
+# Self-Supervised Learning for SAR Target Recognition
 
-## Project Overview
-This project implements a self-supervised learning pipeline that:
-1. Uses rotation prediction (0°, 90°, 180°, 270°) as a pretext task
-2. Supports multiple deep learning architectures (CNN, ResNet, VGG, etc.)
-3. Implements various downstream classifiers (Random Forest, SVM, Gradient Boosting, XGBoost)
-4. Handles both real and synthetic data from the SAMPLE dataset
+This repository contains the implementation of a novel self-supervised learning framework for Synthetic Aperture Radar (SAR) Automatic Target Recognition (ATR), as described in our paper "Self-Supervised Learning for SAR Target Recognition with Multi-Task Pretext Training."
 
-## Features
-- Multiple architecture support (CNN, ResNet50/101/152, EfficientNetB0, VGG16/19, InceptionV3, U-Net)
-- Data augmentation and balancing
-- Feature extraction from intermediate layers
-- Multiple downstream classifiers
-- Cross-validation for robust evaluation
-- Performance visualization
-- Model saving and loading capabilities
+## Overview
 
-## Installation
+Our framework leverages multi-task pretext training to develop robust feature representations directly from measured SAR data, eliminating the dependency on synthetic data. The implementation includes:
 
-### Prerequisites
-- Python 3.8 or higher
-- CUDA-compatible GPU (recommended)
+1. **Tensorflow/Keras Implementation** (`exp-07/07.04.0.py`): Primary implementation using TensorFlow/Keras with a CNN-based architecture.
+2. **PyTorch Implementation** (`exp-07/07.04.1.1.py`): Implementation of Lewis et al's experiment using PyTorch with CUDA-optimized operations.
 
-### Setup
-1. Create a virtual environment:
-```bash
-python -m venv venv
-```
+## Dataset
 
-2. Activate the virtual environment:
-```bash
-# On Windows
-venv\Scripts\activate
+The code is designed to work with the Synthetic and Measured Paired and Labeled Experiment (SAMPLE) dataset, which can be obtained from:
+https://github.com/benjaminlewis-afrl/SAMPLE_dataset_public
 
-# On Unix or MacOS
-source venv/bin/activate
-```
-
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-## Usage
-
-1. Organize your SAMPLE dataset in the following structure:
+The dataset structure should be:
 ```
 SAMPLE_dataset_public/
 ├── png_images/
-│   ├── qpm/
+│   ├── decibel/
 │   │   ├── real/
 │   │   └── synth/
-│   └── decibel/
+│   └── qpm/
 │       ├── real/
 │       └── synth/
 ```
 
-2. Update the `data_dirs` list in the code with your dataset paths.
+## Implementation Details
 
-3. Run the pretext task training:
+### 1. TensorFlow/Keras Implementation (`exp-07/07.04.0.py`)
+
+This implementation includes:
+
+- A configurable multi-task pretext training pipeline
+- Feature extraction using a CNN backbone
+- Multiple downstream classifiers (SVM, XGBoost, Random Forest, Gradient Boosting)
+- Comprehensive evaluation metrics including ROC curves and confusion matrices
+- Experiment management with automatic logging
+
+#### Key Configuration Parameters:
+
 ```python
-for data_dir in data_dirs:
-    for architecture_name in architecture_names:
-        run_pretext_pipeline(data_dir, architecture_name)
+EXPERIMENT_BASE_DIR = 'exp-07'
+EXP_ID = datetime.now().strftime('%Y%m%d-%H%M%S')
+
+hyperparameters = {
+    'img_size': (128, 128),
+    'color_mode': 'grayscale',
+    'test_split_size': 0.2,
+    'cnn_filters': [32, 64, 128, 256],
+    'batch_size': 32,
+    'epochs': 25,
+    'initial_learning_rate': 0.001,
+    'early_stopping_patience': 3,
+}
+
+experiment_parameters = {
+    'mode': 'all',  # choices: 'process', 'pretext', 'downstream', 'all'
+    'split_index': 4,
+    'architecture': 'cnn',
+    'classifier': 'all',
+    'data_dir': '/path/to/SAMPLE_dataset_public/png_images/qpm/real'
+}
 ```
 
-4. Run the downstream task evaluation:
-```python
-for data_dir in data_dirs:
-    for architecture_name in architecture_names:
-        for classifier in classifiers:
-            run_downstream_pipeline(data_dir, architecture_name, classifier, -2)
+#### Running the TensorFlow Implementation:
+
+```bash
+python exp-07/07.04.0.py
 ```
 
-## Configuration
-- Modify `RANDOM_SEED` for reproducibility
-- Adjust image size in `load_data_from_directory()`
-- Configure model architectures in `architecture_names`
-- Modify classifier options in `classifiers`
-- Adjust training parameters in `build_custom_cnn_model()`
+### 2. PyTorch Implementation (`exp-07/07.04.1.1.py`)
 
-## Results
+This implementation offers:
+
+- GPU-optimized operations using CUDA
+- Mixed precision training for faster execution
+- Automated k-value experiments as per Lewis et al.'s methodology
+- Comprehensive visualization of results
+
+#### Key Configuration Parameters:
+
+```python
+EXPERIMENT_BASE_DIR = os.path.join('exp-07', f'{EXP_ID}')
+
+hyperparameters = {
+    'rf_n_estimators': 100,
+    'svm_kernel': 'linear',
+    'gb_n_estimators': 100,
+    'xgb_n_estimators': 100,
+    'batch_size': 16,
+    'num_epochs': 60,
+    'learning_rate': 0.001,
+    'validation_ratio': 0.15,
+    'early_stopping_patience': 5
+}
+```
+
+#### Running the PyTorch Implementation:
+
+```bash
+python exp-07/07.04.1.1.py
+```
+
+## Pretext Tasks
+
+Both implementations use the following pretext tasks for self-supervised learning:
+
+1. **Original Image Preservation**: The unaltered image to maintain SAR signature characteristics
+2. **Rotations (90°, 180°, 270°)**: Different orientation perspectives
+3. **Gaussian Blur**: Simulates resolution degradation
+4. **Flips (Horizontal, Vertical)**: Creates mirrored versions
+5. **Denoising**: Using BM3D algorithm to learn noise-robust features
+6. **Zoom-In Transformation**: Creating multi-scale representations
+
+## Results and Evaluation
+
 The code generates:
-- Training/validation loss and accuracy plots
-- Performance metrics for downstream tasks:
-  - Accuracy
-  - Precision
-  - Recall
-  - F1-score
 
-## File Structure
-```
-.
-├── README.md
-├── requirements.txt
-├── exp-01.py
-└── exp-01.ipynb
-```
+1. **Training History**: Logs and plots of pretext task training
+2. **Performance Metrics**: Accuracy, precision, recall, F1-score
+3. **ROC Curves**: With true positive rates at specified false positive rate thresholds
+4. **Confusion Matrices**: For downstream classification tasks
 
-## Contributing
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+Results are saved in:
+- `EXPERIMENT_BASE_DIR/results/`: Metrics and logs
+- `EXPERIMENT_BASE_DIR/figures/`: Plots and visualizations
+
+## Comparison with Lewis et al.
+
+Our implementation includes a version of the experiment from Lewis et al. (2019) to enable direct comparison:
+
+- In our version, we take only the measured data decreased by more than 30% without synthetic replacement
+- In Lewis et al.'s adaptation, we gradually decrease the amount of measured data (k-value), but the missing measured data is not replaced with synthetic equivalents
 
 ## License
-This project is licensed under the MIT License - see the LICENSE file for details
 
-## Contact
-Md Al Siam - md.al.siam.008@gmail.com
-Project Link: [https://github.com/MdAlSiam/ssl-sar-atr](https://github.com/MdAlSiam/ssl-sar-atr)
+This code is provided for academic research purposes only. Please cite our paper if you use this code:
 
-## Acknowledgments
-- SAMPLE dataset creators and contributors
-- TensorFlow team for the deep learning framework
-- scikit-learn team for the machine learning tools
+```
+@article{siam2025selfsupervised,
+  title={Self-Supervised Learning for SAR Target Recognition with Multi-Task Pretext Training},
+  author={Siam, Md Al and Noor, Dewan Fahim},
+  journal={},
+  year={2025}
+}
+```
 
----
+<!-- ## Acknowledgments
+
+This work is supported by the funds provided by the National Science Foundation and by DoD OUSD (R&E) under Cooperative Agreement PHY-2229929 (The NSF AI Institute for Artificial and Natural Intelligence). -->

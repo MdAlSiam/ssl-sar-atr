@@ -1,5 +1,3 @@
-# No validation set, only train and test
-
 import os
 from pathlib import Path
 import re
@@ -59,9 +57,11 @@ hyperparameters = {
     'gb_n_estimators': 100,
     'xgb_n_estimators': 100,
     'random_seed': RANDOM_SEED,
-    'batch_size': 128, # 16 INPAPER
+    'batch_size': 16, # 16 INPAPER
     'num_epochs': 60,
-    'learning_rate': 0.001
+    'learning_rate': 0.001, # 0.001 INPAPER
+    'validation_ratio': 0.15,  # Added when validation added - 0.15 INPAPER
+    'early_stopping_patience': 5  # Added when validation added - NOT INPAPER
 }
 
 class NumpyEncoder(json.JSONEncoder):
@@ -182,7 +182,7 @@ def augment_single_image(image, pretext_task):
         start_x = (new_w - w) // 2
         aug_image = aug_image[..., start_y:start_y+h, start_x:start_x+w]
         aug_image = aug_image.squeeze()
-
+    
     elif pretext_task == PreextTask.ZOOM_OUT:
         scale_factor = random.uniform(0.6, 0.8)
         
@@ -217,10 +217,10 @@ class SAMPLEDataset(Dataset):
         self.real_root = Path(real_root)
         self.synthetic_root = Path(synthetic_root)
         self.transform = transform or transforms.Compose([
-            transforms.Grayscale(),
+            # transforms.Grayscale(),
             transforms.CenterCrop((64, 64)),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5], std=[0.5])
+            # transforms.Normalize(mean=[0.5], std=[0.5])
         ])
 
         self.class_to_idx = {
@@ -365,7 +365,9 @@ class SARPretrainCNN(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(1000, 500),
             nn.ReLU(inplace=True),
-            nn.Linear(500, len(PreextTask))
+            nn.Linear(500, 250),
+            nn.ReLU(inplace=True),
+            nn.Linear(250, len(PreextTask))
         )
         
     def forward(self, x, return_features=False):
@@ -431,12 +433,30 @@ def create_data_split_k(dataset, test_elevation=17, k=1.0):
         training_data.extend(class_data[class_label][:samples_to_take])
 
     # Add to create_data_split_k
-    with open(f"{RESULTS_DIR}/k_{k}_sample_selection.txt", 'w') as f:
-        f.write(f"Samples selected for k={k}:\n")
+    with open(f"{RESULTS_DIR}/k_{k:.2f}_sample_selection.txt", 'w') as f:
+        f.write(f"Samples selected for k={k:.2f}:\n")
         for sample in training_data:
             f.write(f"Class: {sample['label']}, Azimuth: {sample['azimuth']}, File: {sample['filename']}\n")
     
     return training_data, test_data
+
+def create_train_val_split(train_data, val_ratio=0.15):
+    """Split training data into train and validation sets"""
+    total_samples = len(train_data)
+    val_size = int(total_samples * val_ratio)
+    
+    # Create a random permutation of indices
+    indices = torch.randperm(total_samples).tolist()
+    
+    # Split indices
+    train_indices = indices[val_size:]
+    val_indices = indices[:val_size]
+    
+    # Split the data
+    train_subset = [train_data[i] for i in train_indices]
+    val_subset = [train_data[i] for i in val_indices]
+    
+    return train_subset, val_subset
 
 def train_pretext(model, train_loader, optimizer, criterion, device):
     """GPU-optimized pretext training function with mixed precision"""
@@ -476,6 +496,32 @@ def train_pretext(model, train_loader, optimizer, criterion, device):
             torch.cuda.empty_cache()
     
     return epoch_loss / batch_count
+
+def validate_pretext(model, val_loader, criterion, device):
+    """Validate pretext task performance"""
+    model.eval()
+    total_loss = 0
+    correct = 0
+    total = 0
+    
+    with torch.no_grad():
+        for batch_imgs, batch_pretext_labels, _ in val_loader:
+            batch_imgs = batch_imgs.view(-1, 1, 64, 64).to(device, non_blocking=True)
+            batch_pretext_labels = batch_pretext_labels.view(-1).to(device, non_blocking=True)
+            
+            outputs = model(batch_imgs)
+            loss = criterion(outputs, batch_pretext_labels)
+            
+            total_loss += loss.item()
+            
+            # Calculate accuracy
+            _, predicted = outputs.max(1)
+            total += batch_pretext_labels.size(0)
+            correct += predicted.eq(batch_pretext_labels).sum().item()
+    
+    avg_loss = total_loss / len(val_loader)
+    accuracy = 100. * correct / total
+    return avg_loss, accuracy
 
 def extract_features(model, dataloader, device):
     """GPU-optimized feature extraction"""
@@ -807,8 +853,17 @@ def plot_k_results(k_values, results, detailed_metrics, save_path):
     """Plot k vs accuracy results with error bars from multiple runs"""
     plt.figure(figsize=(12, 8))
     
-    for clf_name, accuracies in results.items():
-        accuracies = np.array(accuracies)
+    for clf_name, accuracies_dict in results.items():
+        # Convert the dictionary values to a proper numpy array
+        accuracies_list = []
+        for k in k_values:
+            if k in accuracies_dict:
+                accuracies_list.append(accuracies_dict[k])
+        
+        # Convert to numpy array ensuring consistent shape
+        accuracies = np.array(accuracies_list)
+        
+        # Calculate mean and std
         mean_acc = np.mean(accuracies, axis=1)
         std_acc = np.std(accuracies, axis=1)
         
@@ -819,7 +874,7 @@ def plot_k_results(k_values, results, detailed_metrics, save_path):
                         alpha=0.2)
     
     plt.xlabel('Fraction of Measured Training Data (k)')
-    plt.ylabel('Classification Accuracy (%)')
+    plt.ylabel('Classification Accuracy')
     plt.title('Self-Supervised Learning Results (with std dev)')
     plt.legend()
     plt.grid(True)
@@ -859,12 +914,12 @@ def save_detailed_metrics(metrics, k_values, filepath):
     with open(filepath, 'w') as f:
         json.dump(output, f, cls=NumpyEncoder, indent=2)
 
-def run_self_supervised_experiment(real_root, synthetic_root, test_elevation=17, n_runs=2):
+def run_self_supervised_experiment(real_root, synthetic_root, test_elevation=17, n_runs=10):
     """Main experiment function"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f'[DEVICE] {device}')
 
-    k_values = np.arange(0.05, 1.05, 0.05) # 0.05, 1.05, 0.05
+    k_values = np.arange(0.05, 1.05, 0.05) # 0.00, 1.05, 0.05 INPAPER
     results = defaultdict(lambda: defaultdict(list))
     detailed_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -886,11 +941,18 @@ def run_self_supervised_experiment(real_root, synthetic_root, test_elevation=17,
             
             # Create k-based split
             train_data, test_data = create_data_split_k(dataset, test_elevation, k)
-            print(f"\nTraining with {len(train_data)} samples, Testing with {len(test_data)} samples")
+            print(f"\nTotal training samples before split: {len(train_data)}")
 
-            # Create two different datasets:
+            # Split training data into train and validation
+            train_subset, val_subset = create_train_val_split(train_data, val_ratio=hyperparameters['validation_ratio'])
+            print(f"Training samples: {len(train_subset)}")
+            print(f"Validation samples: {len(val_subset)}")
+
+            # Create datasets:
             # 1. For pretext task training (with augmentations)
-            pretext_train_dataset = SelfSupervisedDataset(train_data, dataset.transform)
+            pretext_train_dataset = SelfSupervisedDataset(train_subset, dataset.transform)
+            pretext_val_dataset = SelfSupervisedDataset(val_subset, dataset.transform)
+
             pretext_train_loader = DataLoader(
                 pretext_train_dataset, 
                 batch_size=hyperparameters['batch_size'], 
@@ -900,13 +962,22 @@ def run_self_supervised_experiment(real_root, synthetic_root, test_elevation=17,
                 prefetch_factor=2
             )
 
+            pretext_val_loader = DataLoader(
+                pretext_val_dataset,
+                batch_size=hyperparameters['batch_size'],
+                shuffle=False,  # No need to shuffle validation data
+                pin_memory=True,
+                num_workers=4,
+                prefetch_factor=2
+            )
+
             # 2. For feature extraction (without augmentations)
-            downstream_train_dataset = DownstreamDataset(train_data, dataset.transform)
+            downstream_train_dataset = DownstreamDataset(train_subset, dataset.transform)  # Note: using train_subset
             downstream_test_dataset = DownstreamDataset(test_data, dataset.transform)
             
             downstream_train_loader = DataLoader(
                 downstream_train_dataset, 
-                batch_size= hyperparameters['batch_size'],
+                batch_size=hyperparameters['batch_size'],
                 shuffle=True,
                 pin_memory=True,
                 num_workers=4,  
@@ -922,14 +993,40 @@ def run_self_supervised_experiment(real_root, synthetic_root, test_elevation=17,
             
             # Train pretext model
             pretext_model = SARPretrainCNN().to(device)
-            optimizer = optim.Adam(pretext_model.parameters(), lr=0.001)
+            optimizer = optim.Adam(pretext_model.parameters(), lr=hyperparameters['learning_rate'])
             criterion = nn.CrossEntropyLoss()
             
-            # Pretext task training
-            for epoch in range(60):
-                avg_loss = train_pretext(pretext_model, pretext_train_loader, optimizer, criterion, device)
+            best_val_loss = float('inf')
+            patience = hyperparameters['early_stopping_patience']
+            patience_counter = 0
+            best_model_state = None
+
+            print("\nStarting pretext training:")
+            for epoch in range(hyperparameters['num_epochs']):
+                # Training
+                train_loss = train_pretext(pretext_model, pretext_train_loader, optimizer, criterion, device)
+                
+                # Validation
+                val_loss, val_acc = validate_pretext(pretext_model, pretext_val_loader, criterion, device)
+                
                 if epoch % 10 == 0:
-                    print(f"Epoch {epoch}, Average loss: {avg_loss:.4f}")
+                    print(f"Epoch {epoch:3d} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
+                
+                # Early stopping check
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    patience_counter = 0
+                    best_model_state = copy.deepcopy(pretext_model.state_dict())
+                else:
+                    patience_counter += 1
+                    
+                if patience_counter >= patience:
+                    print(f"Early stopping triggered at epoch {epoch}")
+                    break
+
+            # Load best model for feature extraction if early stopping occurred
+            if best_model_state is not None:
+                pretext_model.load_state_dict(best_model_state)
                 
             # Extract features using original images only
             train_features, train_labels = extract_features(
@@ -1038,6 +1135,17 @@ def run_self_supervised_experiment(real_root, synthetic_root, test_elevation=17,
     # Convert results to format needed for plotting
     final_results = {clf_name: [values[k] for k in k_values] 
                     for clf_name, values in results.items()}
+
+    # Before plotting, prepare results correctly
+    final_results = {}
+    for clf_name, values in results.items():
+        accuracies_by_k = []
+        for k in k_values:
+            if k in values:
+                accuracies_by_k.append(values[k])
+            else:
+                accuracies_by_k.append([])
+        final_results[clf_name] = accuracies_by_k
     
     # Plot results with error bars
     plot_k_results(k_values, final_results, detailed_metrics, f"{FIGURES_DIR}/{EXP_ID}-k_accuracy.png")

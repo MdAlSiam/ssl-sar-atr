@@ -14,8 +14,8 @@
                           Numlock Key: Disabled
 
                       BOOT OPTIONS:
-                        WINDOWS
-                        LINUX:
+                        [WINDOWS]
+                        [LINUX]
                           - At Installation: GPT(UFEI)>>Offline(if no internet)+NTFS(>4GB)?
 
                       NEVER SLEEP:
@@ -60,17 +60,45 @@
                             - Go to the Triggers tab, click New, and select At startup.
                             - In the Actions tab, click New, and browse for the AnyDesk executable (usually found in C:\Program Files (x86)\AnyDesk\AnyDesk.exe).
                             - Click OK to save the task
+                            [LINUX]
+                            cd /etc/systemd/system$
+                            sudo nano anydesk.service
+                                [Unit]
+                                Description=AnyDesk
+                                Requires=network.target
+                                After=systemd-user-sessions.service
 
-                      REMOTE ACCESS VIA TUNNEL:
+                                [Service]
+                                Type=simple
+                                ExecStart=/usr/bin/anydesk --service
+                                PIDFile=/var/run/anydesk.pid
+                                KillMode=mixed
+                                TimeoutStopSec=30
+                                User=root
+                                LimitNOFILE=100000
+
+                                [Install]
+                                WantedBy=multi-user.target
+
+                      REMOTE ACCESS VIA VS CODE TUNNEL:
                         From Server:
                           [WINDOWS+LINUX]
                           > Install "Remote Development" extension
                           > Press F1 → type "Remote Tunnels: Start"
                           > Sign in with GitHub account and Name your machine
-                          From Server: Automatically Run VS Code
                           [WINDOWS]
                           > Run ./startup-wsl.ps1 (user level) and ./wsl-monitor.ps1 (root level, no log in) from terminal
                           > Set sleep and hibernate to Never | Pause windows updates in emergency situations
+                          [LINUX]
+                          // Automatically log into the user, then start anydesk and vs code
+                          sudo mkdir -p /etc/gdm3
+                          sudo nano /etc/gdm3/custom.conf
+                          Modify:
+                            [daemon]
+                            AutomaticLoginEnable=true
+                            AutomaticLogin=arni-linux
+                          sudo systemctl restart gdm3
+                          cat /etc/gdm3/custom.conf
                         From Client:
                           [WINDOWS+LINUX]
                           > Install "Remote Development"
@@ -102,6 +130,9 @@
                       > git log in
                         git config --global user.email "x@y.c"
                         git config --global user.name "UserName"
+                      > MAKE REQUIREMENTS
+                        pip freeze > requirements.txt
+                        (on a new env) pip install -r requirements.txt
 
 >> RANFO:
                       > CUDA COMPATIBILITY WITH TENSORFLOW
