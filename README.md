@@ -7,7 +7,7 @@ This repository contains the implementation of a novel self-supervised learning 
 Our framework leverages multi-task pretext training to develop robust feature representations directly from measured SAR data, eliminating the dependency on synthetic data. The implementation includes:
 
 1. **Tensorflow/Keras Implementation** (`exp-07/07.04.0.py`): Primary implementation using TensorFlow/Keras with a CNN-based architecture.
-2. **PyTorch Implementation** (`exp-07/07.04.1.1.py`): Implementation of Lewis et al's experiment using PyTorch with CUDA-optimized operations.
+2. **PyTorch Implementation** (`exp-07/07.04.1.1.py`): Adaptation of Lewis et al's experiment using PyTorch with CUDA-optimized operations.
 
 ## Dataset
 
@@ -123,14 +123,13 @@ The code generates:
 3. **ROC Curves**: With true positive rates at specified false positive rate thresholds
 4. **Confusion Matrices**: For downstream classification tasks
 
-Results are saved in:
+Results will be saved in:
 - `EXPERIMENT_BASE_DIR/results/`: Metrics and logs
 - `EXPERIMENT_BASE_DIR/figures/`: Plots and visualizations
 
 ## Comparison with Lewis et al.
 
 Our implementation includes a version of the experiment from Lewis et al. (2019) to enable direct comparison:
-
 - In our version, we take only the measured data decreased by more than 30% without synthetic replacement
 - In Lewis et al.'s adaptation, we gradually decrease the amount of measured data (k-value), but the missing measured data is not replaced with synthetic equivalents
 
