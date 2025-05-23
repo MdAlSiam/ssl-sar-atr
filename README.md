@@ -150,6 +150,10 @@ This code is provided for academic research purposes only. Please cite our paper
   doi={10.1109/SoutheastCon56624.2025.10971440}}
 ```
 
+## Award
+
+This work had been selected as one of the Top 5 Finalists for the IEEE-Eta Kappa Nu Best Student Paper Award at IEEE SoutheastCon 2025. Abstract, links to publications, and the presentation has been uploaded to the `IEEESoutheastCon2025` directory.
+
 ## Acknowledgment
 
 This work is supported by the funds provided by the National Science Foundation and by DoD OUSD (R&E) under Cooperative Agreement PHY-2229929 (<a href="https://arni-institute.org/"> The NSF AI Institute for Artificial and Natural Intelligence</a>).
