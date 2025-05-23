@@ -152,8 +152,9 @@ This code is provided for academic research purposes only. Please cite our paper
 
 ## Award
 
-This work had been selected as one of the Top 5 Finalists for the IEEE-Eta Kappa Nu Best Student Paper Award at IEEE SoutheastCon 2025. Abstract, links to publications, and the presentation has been uploaded to the `IEEESoutheastCon2025` directory.
+This work have been selected as one of the Top 5 Finalists for the IEEE-Eta Kappa Nu Best Student Paper Award at <a href="https://ieeexplore.ieee.org/xpl/conhome/10971430/proceeding">IEEE SoutheastCon 2025</a> (Charlotte, NC). Abstract, links to publication, and the presentation have been uploaded to the `IEEESoutheastCon2025` directory.
+<img src="IEEESoutheastCon2025/best-paper-award-certificate.jpg" alt="Certificate" width="500"/>
 
 ## Acknowledgment
 
-This work is supported by the funds provided by the National Science Foundation and by DoD OUSD (R&E) under Cooperative Agreement PHY-2229929 (<a href="https://arni-institute.org/"> The NSF AI Institute for Artificial and Natural Intelligence</a>).
+This work is supported by the funds provided by the National Science Foundation and by DoD OUSD (R&E) under Cooperative Agreement PHY-2229929 (<a href="https://arni-institute.org/">The NSF AI Institute for Artificial and Natural Intelligence</a>).
