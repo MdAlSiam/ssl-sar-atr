@@ -138,14 +138,18 @@ Our implementation includes a version of the experiment from Lewis et al. (2019)
 This code is provided for academic research purposes only. Please cite our paper if you use this code:
 
 ```
-@article{siam2025selfsupervised,
-  title={Self-Supervised Learning for SAR Target Recognition with Multi-Task Pretext Training},
+@INPROCEEDINGS{10971440,
   author={Siam, Md Al and Noor, Dewan Fahim},
-  journal={},
-  year={2025}
-}
+  booktitle={SoutheastCon 2025}, 
+  title={Self-Supervised Learning for SAR Target Recognition with Multi-Task Pretext Training}, 
+  year={2025},
+  volume={},
+  number={},
+  pages={1207-1213},
+  keywords={Training;Support vector machines;Deep learning;Target recognition;Training data;Self-supervised learning;Multitasking;Data models;Synthetic aperture radar;Synthetic data;self-supervised learning;synthetic aperture radar;automatic target recognition;target classification;SAR ATR},
+  doi={10.1109/SoutheastCon56624.2025.10971440}}
 ```
 
-<!-- ## Acknowledgments
+## Acknowledgment
 
-This work is supported by the funds provided by the National Science Foundation and by DoD OUSD (R&E) under Cooperative Agreement PHY-2229929 (The NSF AI Institute for Artificial and Natural Intelligence). -->
+This work is supported by the funds provided by the National Science Foundation and by DoD OUSD (R&E) under Cooperative Agreement PHY-2229929 (<a href="https://arni-institute.org/"> The NSF AI Institute for Artificial and Natural Intelligence</a>).

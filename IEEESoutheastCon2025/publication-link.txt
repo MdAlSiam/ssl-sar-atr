@@ -1,0 +1,26 @@
+Abstract
+========
+The scarcity of labeled data and the difference between synthetic and measured imagery impose major obstacles during Synthetic Aperture Radar (SAR) Automatic Target Recognition (ATR).\
+This paper presents a novel self-supervised learning (SSL) framework for SAR target recognition.\
+The model utilizes multi-task pretext training to develop robust feature representations from measured SAR data.\
+Our framework removes reliance on synthetic data by employing complementary pretext tasks to pretrain a deep learning network.\
+The learned features are then evaluated using multiple classifiers,\
+including Support Vector Machine (SVM), XGBoost, and Random Forest, on the Synthetic and Measured Paired and Labeled Experiment (SAMPLE) dataset.\
+The experimental findings demonstrate competitive performance and robust detection capabilities,\
+even with limited training data and low false positive rates.\
+Our framework also outperforms traditional methods and eliminates the dependency on synthetic data.\
+This work highlights the potential of SSL in SAR applications and provides a foundation for future research in domain-specific self-supervised learning.\
+This framework not only advances the state of SAR target recognition\
+but also establishes a foundation for leveraging self-supervised learning in other domain-specific applications with limited labeled data.
+
+Links to Publication
+====================
+
+https://ieeexplore.ieee.org/abstract/document/10971440/
+
+https://par.nsf.gov/biblio/10586731
+
+Award
+=====
+Finalist – IEEE-HKN Best Student Paper Award
+Selected as one of the Top 5 Finalists for the IEEE-Eta Kappa Nu Best Student Paper Award at IEEE SoutheastCon 2025.
