@@ -1,4 +1,6 @@
 >> SETTING UP THE SYSTEM AS SERVER:
+                      > Install Linux First
+
                       AUTOMATIC RESTART DUE TO POWER FAILURE:
                         [WINDOWS+LINUX]
                         > Enter your BIOS/UEFI settings when booting (usually by pressing F12, F2, Del, or Esc during startup) (Advanced->Power Options)
@@ -18,6 +20,17 @@
                         [LINUX]
                           - At Installation: GPT(UFEI)>>Offline(if no internet)+NTFS(>4GB)?
 
+                      AUTOMATIC LOG IN TO THE USER:
+                          [LINUX]
+                          sudo mkdir -p /etc/gdm3
+                          sudo nano /etc/gdm3/custom.conf
+                          Modify:
+                            [daemon]
+                            AutomaticLoginEnable=true
+                            AutomaticLogin=arni-linux
+                          sudo systemctl restart gdm3
+                          cat /etc/gdm3/custom.conf
+
                       NEVER SLEEP:
                         [WINDOWS]
                         > System, Power
@@ -27,6 +40,7 @@
                             - Hibernate never
                             - Enrgey saver off
                         [LINUX]
+                          [See this page (public) on the browser to copy commands]
                         > sudo nano /etc/systemd/logind.conf
                         > Uncomment and modify:
                             HandleLidSwitch=ignore
@@ -47,7 +61,12 @@
 
                       ANYDESK ACCESS:
                         [WINDOWS+LINUX]
-                        > Install ANYDESK
+                        > Install ANYDESK (debian)
+                            sudo apt update
+                            cd Downloads
+                            sudo dpkg -i anydesk_VERSION_amd64.deb
+                            sudo apt-get install -f
+                            anydesk
                         > Settings:
                             - Access: Interactive Access: Always show incoming session requests
                             - Permission Profiles: Full Access, Set Passwords, Select all things possible
@@ -83,6 +102,7 @@
                       REMOTE ACCESS VIA VS CODE TUNNEL:
                         From Server:
                           [WINDOWS+LINUX]
+                          > Install code from the Ubuntu app store
                           > Install "Remote Development" extension
                           > Press F1 → type "Remote Tunnels: Start"
                           > Sign in with GitHub account and Name your machine
@@ -90,15 +110,8 @@
                           > Run ./startup-wsl.ps1 (user level) and ./wsl-monitor.ps1 (root level, no log in) from terminal
                           > Set sleep and hibernate to Never | Pause windows updates in emergency situations
                           [LINUX]
-                          // Automatically log into the user, then start anydesk and vs code
-                          sudo mkdir -p /etc/gdm3
-                          sudo nano /etc/gdm3/custom.conf
-                          Modify:
-                            [daemon]
-                            AutomaticLoginEnable=true
-                            AutomaticLogin=arni-linux
-                          sudo systemctl restart gdm3
-                          cat /etc/gdm3/custom.conf
+                          > Search Startup Applications
+                          > Name: Visual Studio Code, Command: code .
                         From Client:
                           [WINDOWS+LINUX]
                           > Install "Remote Development"
