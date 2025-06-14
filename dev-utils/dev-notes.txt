@@ -1,5 +1,6 @@
 >> SETTING UP THE SYSTEM AS SERVER:
-                      > Install Linux First
+                      INSTALL LINUX:
+                        From bootable USB device
 
                       AUTOMATIC RESTART DUE TO POWER FAILURE:
                         [WINDOWS+LINUX]
@@ -111,12 +112,28 @@
                           > Set sleep and hibernate to Never | Pause windows updates in emergency situations
                           [LINUX]
                           > Search Startup Applications
-                          > Name: Visual Studio Code, Command: code .
+                          > Command: bash -c 'sleep 30 && code tunnel kill && rm -rf ~/.vscode/cli && code .'
                         From Client:
                           [WINDOWS+LINUX]
                           > Install "Remote Development"
                           > Press F1 → "Remote Tunnels: Connect"
                           > Sign in with same GitHub account and Select your desktop from list
+                        Tunnel Issues:
+                          > [On Remote] Tunnel is connecting/Connected to an existing tunnel process running on this machine
+                          # Check tunnel status
+                          code tunnel status
+                          # Try to kill any existing tunnels
+                          code tunnel kill
+                          # Remove the CLI configuration (especially, if not killed)
+                          rm -rf ~/.vscode/cli
+                          # [Optional] Kill all VS Code processes
+                          pkill -f code
+                          # Wait a moment
+                          sleep 2
+                          # Start fresh tunnel (Or, open vs code and Profile Sign > Turn on Remote Tunnel Access...) | 
+                          code tunnel --name arni-linux-2
+                          # Log in to the tunnel using GitHub (from anywhere)
+                          https://vscode.dev/tunnel/arni-linux-2
 
 >> KEEP NOTEBOOK RUNNING ON SERVER AND GO OUT CLOSING THE CLIENT:
                       From Client:
